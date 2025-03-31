@@ -1,0 +1,54 @@
+[
+  {
+    "Suggested bundle price": 400.35,
+    "Number of diners": 1,
+    "Category Portions": {
+      "Category A": 1,
+      "Category B": 1,
+      "Category C": 1,
+      "Category D": 1
+    },
+    "Original bundle price": 471.00,
+    "Discount percentage": 15.0,
+    "Price per diner": 400.35
+  },
+  {
+    "Suggested bundle price": 1026.08,
+    "Number of diners": 2,
+    "Category Portions": {
+      "Category A": 2,
+      "Category B": 2,
+      "Category C": 2,
+      "Category D": 2
+    },
+    "Original bundle price": 1166.00,
+    "Discount percentage": 12.0,
+    "Price per diner": 513.04
+  },
+  {
+    "Suggested bundle price": 1986.04,
+    "Number of diners": 4,
+    "Category Portions": {
+      "Category A": 3,
+      "Category B": 4,
+      "Category C": 4,
+      "Category D": 4
+    },
+    "Original bundle price": 2422.00,
+    "Discount percentage": 18.0,
+    "Price per diner": 496.51
+  },
+  {
+    "Suggested bundle price": 3025.28,
+    "Number of diners": 6,
+    "Category Portions": {
+      "Category A": 4,
+      "Category B": 6,
+      "Category C": 6,
+      "Category D": 6
+    },
+    "Original bundle price": 3781.60,
+    "Discount percentage": 20.0,
+    "Price per diner": 504.21
+  }
+]
