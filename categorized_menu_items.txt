@@ -1,37 +1,37 @@
 ===== MENU ITEMS BY PRICE CATEGORY =====
 
------ Category A ($260.00 - $800.00) -----
-  $800.00 - BBQ ribs full
-  $590.00 - Chimichurri steak
-  $500.00 - Shrimp on toast
-  $500.00 - Shrimp mayonnaise | herb yogurt
-  $420.00 - A.B.C. (berry bliss) cookie trio
-  $420.00 - Roasted pork chop
-  $340.00 - Cured salmon & dill cream
-  $320.00 - caramel popcorn | peach melba cookies & brownies
+----- Category A ($260.00 - $590.00) -----
+  $590.00 - chimichurri steak
+  $500.00 - bbq ribs
+  $500.00 - shrimp on toast
+  $500.00 - shrimp mayonnaise
+  $420.00 - A.B.C. (berry, bliss, cookie trio)
+  $420.00 - roasted pork chop
+  $340.00 - curled salmon & dill cream
+  $320.00 - Caramel popcorn peach melba cookies & brownies
   $320.00 - Shrimp linguine
-  $300.00 - Egg & avocado
-  $300.00 - Croque madame
+  $300.00 - egg & avocado
+  $300.00 - croque madame
   $285.00 - Strawberry french toast
   $285.00 - chocolate skillet cookie
   $285.00 - brown butter brownie
   $285.00 - Vongole pasta
   $280.00 - Ragu pasta
-  $280.00 - Tomato & burrata
+  $280.00 - tomato & burrata
   $275.00 - Mushroom pesto
   $275.00 - Chilli bacon spaghetti
   $270.00 - Strawberry crepes
   $265.00 - apple crumble
-  $265.00 - golden almond crumble cinnamon spiced apples vanilla anglaise
+  $265.00 - golden almond crumble
   $260.00 - Spaghetti carbonara
-  $260.00 - Lay low breakfast
-  $260.00 - Grilled cheese toast
+  $260.00 - lay low breakfast
+  $260.00 - grilled cheese toast
 
------ Category B ($115.00 - $250.00) -----
+----- Category B ($85.00 - $250.00) -----
   $250.00 - Banana french toast
   $250.00 - Banana crepes
   $250.00 - sticky toffee pudding
-  $245.00 - soft medjool date cake
+  $250.00 - soft medjoool date cake
   $190.00 - Milk Shakes
   $180.00 - Floats
   $140.00 - caramel macchiato
@@ -49,64 +49,70 @@
   $120.00 - green tea
   $120.00 - black rose tea
   $120.00 - english breakfast tea
-  $120.00 - oolong chrysanthenum tea
+  $120.00 - oolong guanyhemum tea
   $120.00 - earl grey tea
   $120.00 - herbal blends tea
-  $115.00 - Chocolate chip cookie
-
------ Category C ($40.00 - $112.00) -----
-  $112.00 - Vanilla sw English toffee
-  $112.00 - Sea salt caramel
   $110.00 - flat white (H)
   $110.00 - cortado (H)
   $110.00 - cappuccino (H)
-  $100.00 - Strawberry blast
-  $100.00 - Dog ice cream
   $100.00 - caffe latte
-  $95.00 - Natural pistachio
-  $95.00 - Peanut butter
-  $95.00 - Mocha banana
-  $95.00 - Green apple sorbet
-  $95.00 - Mango sorbet
-  $95.00 - Strawberry sorbet
-  $95.00 - Carrot citrus sorbet
-  $95.00 - Pineapple sorbet
-  $95.00 - Blueberry sorbet
-  $94.00 - Chocolate peanut butter
-  $94.00 - Strawberry basil
-  $85.00 - Cookies & cream
   $85.00 - americano
-  $80.00 - Madagascar vanilla
+
+----- Category C ($10.00 - $70.00) -----
   $70.00 - espresso (H)
   $50.00 - special beans +
-  $40.00 - caramel macchiato (Menu_3.png)
-  $40.00 - valrhona chocolate matcha latte
-
------ Category D ($1.60 - $25.00) -----
+  $40.00 - Caramel macchiato
+  $40.00 - Valrhona chocolate matcha latte
+  $40.00 - Caramel macchiato (variant 1)
+  $40.00 - Valrhona chocolate matcha latte (variant 1)
   $25.00 - extra shot +
   $25.00 - oat milk +
   $20.00 - Americano
-  $20.00 - caffe latte (Menu_3.png)
-  $20.00 - caffe mocha (Menu_3.png)
-  $20.00 - strawberry lemon soda (Menu_3.png)
-  $20.00 - peach soda (Menu_3.png)
-  $20.00 - mango passion fruit soda (Menu_3.png)
-  $20.00 - lemonade soda (Menu_3.png)
-  $12.00 - Shrimp Poke
-  $10.00 - Salmon Poke
-  $10.00 - Chicken Poke
-  $10.00 - Caesar Salad
-  $10.00 - Chicken & Baby Gem Salad
-  $10.00 - burrito
-  $10.00 - roasted salmon
-  $5.00 - + add on ++ (indica) wake cup
-  $3.20 - Sundae a.b.c
-  $3.20 - Berry bliss
-  $3.20 - Cookie trio
-  $3.20 - Laykon (salted caramel / sticky bun / coffee crunch)
-  $3.20 - Laykon (raspberry hibiscus sorbet / white chocolate raspberry ganache / chocolate pearls / berries)
-  $3.20 - Laykon (cookies & cream / cookie dough fudge / brownie chocolate fudge)
-  $3.00 - sourdough
-  $1.60 - Caramel popcorn
-  $1.60 - Peach melbas
-  $1.60 - Cookies & brownies
+  $20.00 - Caffe latte
+  $20.00 - Caffe mocha
+  $20.00 - Strawberry lemon soda
+  $20.00 - Peach soda
+  $20.00 - Mango passion fruit soda
+  $20.00 - Lemonade soda
+  $20.00 - Americano (variant 1)
+  $20.00 - Caffe latte (variant 1)
+  $20.00 - Caffe mocha (variant 1)
+  $20.00 - Strawberry lemon soda (variant 1)
+  $20.00 - Peach soda (variant 1)
+  $20.00 - Mango passion fruit soda (variant 1)
+  $20.00 - Lemonade soda (variant 1)
+  $12.00 - Chicken poke
+  $11.00 - Shrimp poke
+  $10.00 - Salmon poke
+  $10.00 - Caesar salad
+  $10.00 - Chicken & baby gem salad
+
+----- Category D ($0.50 - $4.00) -----
+  $4.00 - Dog ice cream, strawberry flavor
+  $4.00 - Dog ice cream, peanut butter flavor
+  $3.20 - a.b.c
+  $3.20 - berry bliss
+  $3.20 - cookie trio
+  $3.00 - Strawberry blast ice cream
+  $3.00 - Green mango swirl ice cream
+  $3.00 - Milk chocolate chip ice cream
+  $3.00 - Yellow creme ice cream
+  $3.00 - Salted caramel swirl ice cream
+  $3.00 - Madagascar vanilla bean ice cream
+  $3.00 - Green tea matcha ice cream
+  $3.00 - Strawberry gelato
+  $3.00 - Dairy chocolate gelato
+  $3.00 - Peanut butter cup ice cream
+  $3.00 - Cookie & cream ice cream
+  $3.00 - Strawberry banana sorbet
+  $3.00 - Dairy chocolatey sorbet
+  $3.00 - Green apple sorbet
+  $3.00 - Lemon fruit sorbet
+  $3.00 - Blood orange sorbet
+  $2.00 - Roasted salmon
+  $1.60 - caramel popcorn
+  $1.60 - peach melbla
+  $1.60 - cookies & brownies
+  $0.50 - Organic egg
+  $0.50 - Avocado
+  $0.50 - Burrata

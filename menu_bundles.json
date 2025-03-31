@@ -1,0 +1,58 @@
+[
+    {
+        "bundle_name": "Solo Treat",
+        "suggested_bundle_price": "$495.00",
+        "number_of_diners": 1,
+        "category_portions": {
+            "Category A": 1,
+            "Category B": 1,
+            "Category C": 1,
+            "Category D": 1
+        },
+        "original_bundle_price": "$551.60",
+        "discount_percentage": "10.26%",
+        "price_per_diner": "$495.00"
+    },
+    {
+        "bundle_name": "Couple's Delight",
+        "suggested_bundle_price": "$1100.00",
+        "number_of_diners": 2,
+        "category_portions": {
+            "Category A": 1,
+            "Category B": 2,
+            "Category C": 2,
+            "Category D": 2
+        },
+        "original_bundle_price": "$1251.60",
+        "discount_percentage": "12.11%",
+        "price_per_diner": "$550.00"
+    },
+    {
+        "bundle_name": "Family Feast",
+        "suggested_bundle_price": "$2160.00",
+        "number_of_diners": 4,
+        "category_portions": {
+            "Category A": 2,
+            "Category B": 4,
+            "Category C": 4,
+            "Category D": 4
+        },
+        "original_bundle_price": "$2545.20",
+        "discount_percentage": "15.13%",
+        "price_per_diner": "$540.00"
+    },
+    {
+        "bundle_name": "Group Gathering",
+        "suggested_bundle_price": "$3000.00",
+        "number_of_diners": 6,
+        "category_portions": {
+            "Category A": 3,
+            "Category B": 6,
+            "Category C": 6,
+            "Category D": 6
+        },
+        "original_bundle_price": "$3664.80",
+        "discount_percentage": "18.14%",
+        "price_per_diner": "$500.00"
+    }
+]
