@@ -1,0 +1,16 @@
+Here are the menu items and prices extracted from the image:
+
+Set : sundae
+A.B.C. (berry bliss) cookie trio 420.-
+Set : mini sundae
+caramel popcorn | peach melba cookies & brownies 320.-
+
+Americano 20.-
+caffe latte 20.-
+caffe mocha 20.-
+strawberry lemon soda 20.-
+peach soda 20.-
+mango passion fruit soda 20.-
+lemonade soda 20.-
+caramel macchiato 40.-
+valrhona chocolate matcha latte 40.-

@@ -1,0 +1,11 @@
+Here are all the menu items and their corresponding prices from the image:
+
+Sundae a.b.c $3.20
+Berry bliss $3.20
+Cookie trio $3.20
+Laykon (salted caramel / sticky bun / coffee crunch) $3.20
+Laykon (raspberry hibiscus sorbet / white chocolate raspberry ganache / chocolate pearls / berries) $3.20
+Laykon (cookies & cream / cookie dough fudge / brownie chocolate fudge) $3.20
+Caramel popcorn $1.60
+Peach melbas $1.60
+Cookies & brownies $1.60

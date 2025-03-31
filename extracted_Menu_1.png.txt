@@ -1,0 +1,32 @@
+Here is the list of all menu items and prices extracted from the image:
+
+americano 85.-
+caffe latte 100.-
+caffe mocha 125.-
+caramel macchiato 140.-
+orangina espresso 130.-
+flat white (H) 110.-
+cortado (H) 110.-
+cappuccino (H) 110.-
+espresso (H) 70.-
+affogato*** 140.-
+
+valrhona chocolate 140.-
+matcha latte 140.-
+thai tea latte 140.-
+thai tea frappe 140.-
+strawberry lemon soda 120.-
+peach soda 120.-
+mango passion fruit soda 120.-
+lemonade soda 120.- 
+
+green tea 120.-
+black rose tea 120.-
+english breakfast tea 120.-
+oolong chrysanthenum tea 120.-
+earl grey tea 120.-
+herbal blends tea 120.-
+
+extra shot +25.-
+special beans +50.-
+oat milk +25.-

@@ -1,0 +1,112 @@
+===== MENU ITEMS BY PRICE CATEGORY =====
+
+----- Category A ($260.00 - $800.00) -----
+  $800.00 - BBQ ribs full
+  $590.00 - Chimichurri steak
+  $500.00 - Shrimp on toast
+  $500.00 - Shrimp mayonnaise | herb yogurt
+  $420.00 - A.B.C. (berry bliss) cookie trio
+  $420.00 - Roasted pork chop
+  $340.00 - Cured salmon & dill cream
+  $320.00 - caramel popcorn | peach melba cookies & brownies
+  $320.00 - Shrimp linguine
+  $300.00 - Egg & avocado
+  $300.00 - Croque madame
+  $285.00 - Strawberry french toast
+  $285.00 - chocolate skillet cookie
+  $285.00 - brown butter brownie
+  $285.00 - Vongole pasta
+  $280.00 - Ragu pasta
+  $280.00 - Tomato & burrata
+  $275.00 - Mushroom pesto
+  $275.00 - Chilli bacon spaghetti
+  $270.00 - Strawberry crepes
+  $265.00 - apple crumble
+  $265.00 - golden almond crumble cinnamon spiced apples vanilla anglaise
+  $260.00 - Spaghetti carbonara
+  $260.00 - Lay low breakfast
+  $260.00 - Grilled cheese toast
+
+----- Category B ($115.00 - $250.00) -----
+  $250.00 - Banana french toast
+  $250.00 - Banana crepes
+  $250.00 - sticky toffee pudding
+  $245.00 - soft medjool date cake
+  $190.00 - Milk Shakes
+  $180.00 - Floats
+  $140.00 - caramel macchiato
+  $140.00 - affogato***
+  $140.00 - valrhona chocolate
+  $140.00 - matcha latte
+  $140.00 - thai tea latte
+  $140.00 - thai tea frappe
+  $130.00 - orangina espresso
+  $125.00 - caffe mocha
+  $120.00 - strawberry lemon soda
+  $120.00 - peach soda
+  $120.00 - mango passion fruit soda
+  $120.00 - lemonade soda
+  $120.00 - green tea
+  $120.00 - black rose tea
+  $120.00 - english breakfast tea
+  $120.00 - oolong chrysanthenum tea
+  $120.00 - earl grey tea
+  $120.00 - herbal blends tea
+  $115.00 - Chocolate chip cookie
+
+----- Category C ($40.00 - $112.00) -----
+  $112.00 - Vanilla sw English toffee
+  $112.00 - Sea salt caramel
+  $110.00 - flat white (H)
+  $110.00 - cortado (H)
+  $110.00 - cappuccino (H)
+  $100.00 - Strawberry blast
+  $100.00 - Dog ice cream
+  $100.00 - caffe latte
+  $95.00 - Natural pistachio
+  $95.00 - Peanut butter
+  $95.00 - Mocha banana
+  $95.00 - Green apple sorbet
+  $95.00 - Mango sorbet
+  $95.00 - Strawberry sorbet
+  $95.00 - Carrot citrus sorbet
+  $95.00 - Pineapple sorbet
+  $95.00 - Blueberry sorbet
+  $94.00 - Chocolate peanut butter
+  $94.00 - Strawberry basil
+  $85.00 - Cookies & cream
+  $85.00 - americano
+  $80.00 - Madagascar vanilla
+  $70.00 - espresso (H)
+  $50.00 - special beans +
+  $40.00 - caramel macchiato (Menu_3.png)
+  $40.00 - valrhona chocolate matcha latte
+
+----- Category D ($1.60 - $25.00) -----
+  $25.00 - extra shot +
+  $25.00 - oat milk +
+  $20.00 - Americano
+  $20.00 - caffe latte (Menu_3.png)
+  $20.00 - caffe mocha (Menu_3.png)
+  $20.00 - strawberry lemon soda (Menu_3.png)
+  $20.00 - peach soda (Menu_3.png)
+  $20.00 - mango passion fruit soda (Menu_3.png)
+  $20.00 - lemonade soda (Menu_3.png)
+  $12.00 - Shrimp Poke
+  $10.00 - Salmon Poke
+  $10.00 - Chicken Poke
+  $10.00 - Caesar Salad
+  $10.00 - Chicken & Baby Gem Salad
+  $10.00 - burrito
+  $10.00 - roasted salmon
+  $5.00 - + add on ++ (indica) wake cup
+  $3.20 - Sundae a.b.c
+  $3.20 - Berry bliss
+  $3.20 - Cookie trio
+  $3.20 - Laykon (salted caramel / sticky bun / coffee crunch)
+  $3.20 - Laykon (raspberry hibiscus sorbet / white chocolate raspberry ganache / chocolate pearls / berries)
+  $3.20 - Laykon (cookies & cream / cookie dough fudge / brownie chocolate fudge)
+  $3.00 - sourdough
+  $1.60 - Caramel popcorn
+  $1.60 - Peach melbas
+  $1.60 - Cookies & brownies
