@@ -1,9 +1,10 @@
 import React, { useState } from "react";
-import { Container, Row, Col, Button, Card } from "react-bootstrap";
+import { Container, Row, Col, Button, Card, Form } from "react-bootstrap";
 
 function App() {
   const [selectedFiles, setSelectedFiles] = useState([]);
   const [previews, setPreviews] = useState([]);
+  const [restaurantName, setRestaurantName] = useState("");
 
   const handleFileChange = (event) => {
     const files = Array.from(event.target.files);
@@ -15,12 +16,18 @@ function App() {
   };
 
   const handleUpload = async () => {
+    if (!restaurantName.trim()) {
+      alert("Please enter the restaurant name!");
+      return;
+    }
+
     if (selectedFiles.length === 0) {
       alert("Please select images to upload!");
       return;
     }
 
     const formData = new FormData();
+    formData.append("restaurantName", restaurantName); // Add restaurant name to form data
     selectedFiles.forEach((file) => formData.append("images", file));
 
     try {
@@ -40,8 +47,19 @@ function App() {
     <Container className="mt-5">
       <h1 className="text-center">HungryHub Automated Onboarding</h1>
       <p className="text-center text-muted">
-        Upload all the menu images before pressing the "Upload Images" button.
+        Enter the restaurant name and upload all the menu images before pressing the "Upload Images" button.
       </p>
+
+      {/* Restaurant Name Input */}
+      <Form.Group className="mb-3" controlId="restaurantName">
+        <Form.Label>Restaurant Name</Form.Label>
+        <Form.Control
+          type="text"
+          placeholder="Enter restaurant name"
+          value={restaurantName}
+          onChange={(e) => setRestaurantName(e.target.value)}
+        />
+      </Form.Group>
 
       {/* File Input */}
       <div className="text-center mb-3">
