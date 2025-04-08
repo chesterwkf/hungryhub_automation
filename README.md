@@ -71,24 +71,6 @@ The React app will be available at `http://localhost:3000`.
 
 ---
 
-## Connecting React to Flask
-The frontend fetches data from Flask using Axios:
-```jsx
-useEffect(() => {
-    axios.get("http://127.0.0.1:5000/api/hello")
-         .then(response => setMessage(response.data.message))
-         .catch(error => console.error(error));
-}, []);
-```
-
-Ensure Flask has CORS enabled in `app.py`:
-```python
-from flask_cors import CORS
-CORS(app)
-```
-
----
-
 ## Deployment
 
 ### 8. Build the React App
