@@ -34,6 +34,9 @@ cd backend
 ### 3. Install Dependencies INSIDE backend directory
 ```sh
 pip install flask flask-cors flask-restful
+pip install python-dotenv
+pip install anthropic
+pip install google-genai
 ```
 
 ### 4. Run the Flask Backend INSIDE backend directory

@@ -1,10 +1,13 @@
 import React, { useState } from "react";
-import { Container, Row, Col, Button, Card, Form } from "react-bootstrap";
+import { Container, Row, Col, Button, Card, Form, Table } from "react-bootstrap";
 
 function App() {
   const [selectedFiles, setSelectedFiles] = useState([]);
   const [previews, setPreviews] = useState([]);
   const [restaurantName, setRestaurantName] = useState("");
+  const [menuData, setMenuData] = useState(null);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [isSuccess, setIsSuccess] = useState(false);
 
   const handleFileChange = (event) => {
     const files = Array.from(event.target.files);
@@ -26,20 +29,82 @@ function App() {
       return;
     }
 
+    setIsProcessing(true);
+    setIsSuccess(false);
+
     const formData = new FormData();
     formData.append("restaurantName", restaurantName); // Add restaurant name to form data
     selectedFiles.forEach((file) => formData.append("images", file));
 
     try {
-      const response = await fetch("http://localhost:5000/upload", {
+      const response = await fetch("http://localhost:5000/api/upload", {
         method: "POST",
         body: formData,
       });
 
       const data = await response.json();
-      alert(data.message);
+      if (data.error) {
+        alert(`Error: ${data.error}`);
+        setIsProcessing(false);
+      } else {
+        await handleProcessImages();
+      }
     } catch (error) {
       console.error("Error uploading images:", error);
+      setIsProcessing(false);
+    }
+  };
+
+  const handleProcessImages = async () => {
+    try {
+      const response = await fetch("http://localhost:5000/api/process-menu", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ restaurantName }),
+      });
+
+      const data = await response.json();
+
+      if (data.error) {
+        alert(`Error: ${data.error}`);
+        setIsProcessing(false);
+      } else {
+        await handleGenerateBundles();
+      }
+    } catch (error) {
+      console.error("Error processing images:", error);
+      setIsProcessing(false);
+    }
+  };
+
+  const handleGenerateBundles = async () => {
+    try {
+      const response = await fetch("http://localhost:5000/api/generate-bundles", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ restaurantName }),
+      });
+  
+      const data = await response.json();
+      if (data.error) {
+        alert(`Error generating bundles: ${data.error}`);
+        setIsProcessing(false);
+      } else {
+        console.log("Generated Bundles:", data);
+        setMenuData(data);
+        setIsProcessing(false);
+        setIsSuccess(true);
+        setTimeout(() => {
+          setIsSuccess(false);
+        }, 5000);
+      }
+    } catch (error) {
+      console.error("Error generating bundles:", error);
+      setIsProcessing(false);
     }
   };
 
@@ -50,6 +115,18 @@ function App() {
         Enter the restaurant name and upload all the menu images before pressing the "Upload Images" button.
       </p>
 
+      {isProcessing && (
+        <div className="text-center mb-3">
+          <span className="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>
+          Processing images, please wait...
+        </div>
+      )}
+      {isSuccess && (
+        <div className="text-center mb-3 text-success">
+          <strong>All images processed!</strong>
+        </div>
+      )}
+
       {/* Restaurant Name Input */}
       <Form.Group className="mb-3" controlId="restaurantName">
         <Form.Label>Restaurant Name</Form.Label>
@@ -57,6 +134,7 @@ function App() {
           type="text"
           placeholder="Enter restaurant name"
           value={restaurantName}
+          disabled={isProcessing}
           onChange={(e) => setRestaurantName(e.target.value)}
         />
       </Form.Group>
@@ -68,6 +146,7 @@ function App() {
           multiple
           accept="image/*"
           onChange={handleFileChange}
+          disabled={isProcessing}
           className="form-control"
           style={{ maxWidth: "400px", margin: "0 auto" }}
         />
@@ -75,8 +154,8 @@ function App() {
 
       {/* Upload Button */}
       <div className="text-center mb-4">
-        <Button variant="primary" onClick={handleUpload}>
-          Upload Images
+        <Button variant="success" onClick={handleUpload} disabled={isProcessing} className="ms-2">
+          Process Images
         </Button>
       </div>
 
