@@ -152,7 +152,7 @@ function App() {
       setIsSuccess(true);
       setTimeout(() => {
         setIsSuccess(false);
-      }, 5000);
+      }, 30000);
 
     } catch (error) {
       // Catch network errors or other issues
