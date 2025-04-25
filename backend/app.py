@@ -621,7 +621,7 @@ def generate():
         
     try:
         # Read the file content
-        with open(categorized_file_loc, "r") as file:
+        with open(categorized_file_loc, "r", encoding='utf-8') as file:
             menu_content = file.read()
     except Exception as e:
         print(f"Error reading menu file: {e}")

@@ -165,7 +165,7 @@ function App() {
     <Container className="mt-5">
       <h1 className="text-center">HungryHub Automated Onboarding</h1>
       <p className="text-center text-muted">
-        Enter the restaurant name and upload all the menu images before pressing the "Upload Images" button.
+        Enter the restaurant name and upload all the menu images before pressing the "Process Images" button.
       </p>
 
       {isProcessing && (
