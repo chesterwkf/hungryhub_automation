@@ -88,13 +88,35 @@ function App() {
         },
         body: JSON.stringify({ restaurantName }),
       });
-  
+
       const data = await response.json();
       if (data.error) {
         alert(`Error generating bundles: ${data.error}`);
         setIsProcessing(false);
       } else {
-        console.log("Generated Bundles:", data);
+        await handleGenerateExcel();
+      }
+    } catch (error) {
+      console.error("Error generating bundles:", error);
+      setIsProcessing(false);
+    }
+  };
+
+  const handleGenerateExcel = async () => {
+    try {
+      const response = await fetch("http://localhost:5000/api/generate-proposal", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ restaurantName }),
+      });
+      const data = await response.json();
+      if (data.error) {
+        alert(`Error generating excel: ${data.error}`);
+        setIsProcessing(false);
+      } else {
+        console.log("Generated Excel:", data);
         setMenuData(data);
         setIsProcessing(false);
         setIsSuccess(true);
@@ -107,7 +129,6 @@ function App() {
       setIsProcessing(false);
     }
   };
-
   return (
     <Container className="mt-5">
       <h1 className="text-center">HungryHub Automated Onboarding</h1>
