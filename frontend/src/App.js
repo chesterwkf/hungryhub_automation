@@ -111,21 +111,53 @@ function App() {
         },
         body: JSON.stringify({ restaurantName }),
       });
-      const data = await response.json();
-      if (data.error) {
-        alert(`Error generating excel: ${data.error}`);
+
+      // Check if the response indicates success. If not, try to parse potential JSON error.
+      if (!response.ok) {
+        let errorMsg = response.statusText;
+        try {
+          // Attempt to parse error response as JSON
+          const errorData = await response.json();
+          errorMsg = errorData.error || errorMsg;
+        } catch (e) {
+          // Ignore error if response is not JSON
+          console.log("Response was not JSON, using status text for error.");
+        }
+        alert(`Error generating excel: ${errorMsg}`);
         setIsProcessing(false);
-      } else {
-        console.log("Generated Excel:", data);
-        setMenuData(data);
-        setIsProcessing(false);
-        setIsSuccess(true);
-        setTimeout(() => {
-          setIsSuccess(false);
-        }, 5000);
+        return; // Exit the function
       }
+
+      // If response is OK, process it as a blob (file)
+      const blob = await response.blob();
+
+      // Create a URL for the blob object
+      const downloadUrl = window.URL.createObjectURL(blob);
+
+      // Create a temporary anchor element and trigger download
+      const link = document.createElement('a');
+      link.href = downloadUrl;
+      link.setAttribute('download', `${restaurantName || 'restaurant'}_proposal.xlsx`); // Set filename
+      document.body.appendChild(link);
+      link.click();
+
+      // Clean up: remove the link and revoke the URL
+      link.parentNode.removeChild(link);
+      window.URL.revokeObjectURL(downloadUrl);
+
+      console.log("Generated and downloaded Excel proposal.");
+      // Remove setMenuData as we are downloading the file, not storing JSON data
+      // setMenuData(data);
+      setIsProcessing(false);
+      setIsSuccess(true);
+      setTimeout(() => {
+        setIsSuccess(false);
+      }, 5000);
+
     } catch (error) {
-      console.error("Error generating bundles:", error);
+      // Catch network errors or other issues
+      console.error("Error in handleGenerateExcel:", error);
+      alert(`Error generating excel: ${error.message}`);
       setIsProcessing(false);
     }
   };
