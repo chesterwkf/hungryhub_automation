@@ -667,7 +667,7 @@ def generate():
     Please follow this exact structure for each menu bundle:
     Suggested_bundle_price:
     Number_of_diners:
-    category_portionss:
+    category_portions:
         Category A: [number of items]
         Category B: [number of items]
         Category C: [number of items]
