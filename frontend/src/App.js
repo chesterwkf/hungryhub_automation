@@ -8,6 +8,8 @@ function App() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [isSuccess, setIsSuccess] = useState(false);
   const [excelReady, setExcelReady] = useState(false);
+  const [averagePrice, setAveragePrice] = useState("");
+
 
   const handleFileChange = (event) => {
     const files = Array.from(event.target.files);
@@ -24,6 +26,10 @@ function App() {
       alert("Please enter the restaurant name!");
       return;
     }
+    if (!averagePrice.trim()) {
+      alert("Please enter the average price!");
+      return;
+    }    
     if (selectedFiles.length === 0) {
       alert("Please select images to upload!");
       return;
@@ -86,7 +92,7 @@ function App() {
         try {
           const errorData = await response.json();
           errorMsg = errorData.error || errorMsg;
-        } catch {}
+        } catch { }
         throw new Error(errorMsg);
       }
       const blob = await response.blob();
@@ -135,6 +141,19 @@ function App() {
           value={restaurantName}
           disabled={isProcessing || excelReady}
           onChange={(e) => setRestaurantName(e.target.value)}
+        />
+      </Form.Group>
+
+      <Form.Group className="mb-3" controlId="averagePrice">
+        <Form.Label>Average Price</Form.Label>
+        <Form.Control
+          type="number"
+          min="0"
+          step="0.01"
+          placeholder="Enter average price"
+          value={averagePrice}
+          disabled={isProcessing || excelReady}
+          onChange={(e) => setAveragePrice(e.target.value)}
         />
       </Form.Group>
 
