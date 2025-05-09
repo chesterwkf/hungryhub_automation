@@ -21,8 +21,9 @@ from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
 
 # API keys
 from anthropic import Anthropic
-from google import genai
-from google.genai import types
+import google.generativeai as genai
+from google.generativeai import types
+from google.generativeai.types import GenerationConfig
 
 # Load environment variables from .env file
 load_dotenv()
@@ -594,21 +595,35 @@ def process_menu_images(api_key, image_folder, num_price_categories=3):
     return final_price_categories, all_confidence_scores_combined
 
 ### FOR BUNDLE GENERATION ###
-def generate():
+def generate(restaurant_name, average_spend):
+    # Configure the API key once
     try:
-        # Get restaurant name from request
-        restaurant_name = request.json.get('restaurantName')
-        num_categories = request.json.get('numCategories', 4)  # Default to 4
-        if not restaurant_name:
-            return jsonify({"error": "Restaurant name is required"}), 400
-
-        client = genai.Client(
-            api_key= gemini_api_key,
-        )
+        api_key = os.getenv("GEMINI_API_KEY")
+        if not api_key:
+            raise ValueError("GEMINI_API_KEY not found in environment variables.")
+        genai.configure(api_key=api_key)
+    except AttributeError as e:
+        print(f"AttributeError during genai.configure: {e}")
+        print("This strongly suggests an issue with the 'google-generativeai' library installation or version.")
+        print("Please ensure you have the latest version installed (pip install --upgrade google-generativeai) and restart your kernel.")
+        exit()
     except Exception as e:
-        print(f"Error initializing Gemini client: {e}")
-        return
-    
+        print(f"Error configuring Gemini API: {e}")
+        exit()
+    while True:
+        try:
+            average_spend_per_diner = float(average_spend)
+            if average_spend_per_diner <= 0:
+                print("Average spend must be a positive number. Please try again.")
+                continue
+            break
+        except ValueError:
+            print("Invalid input. Please enter a numeric value for average spend.")
+            continue
+        except Exception as e:
+            print(f"An unexpected error occurred while getting input: {e}")
+            return
+
     # Check if categorized_menu_items.txt exists
     categorized_file_loc = os.path.join(
     app.config['UPLOAD_FOLDER'],
@@ -617,8 +632,7 @@ def generate():
     )
     if not os.path.exists(categorized_file_loc):
         print(f"Error: {categorized_file_loc} file not found")
-        return
-        
+
     try:
         # Read the file content
         with open(categorized_file_loc, "r") as file:
@@ -626,147 +640,230 @@ def generate():
     except Exception as e:
         print(f"Error reading menu file: {e}")
         return
+        
+    # Detect categories from menu content
+    categories = []
+    try:
+        # This assumes each line in categorized_menu_items.txt has a category label
+        for line in menu_content.split('\n'):
+            if line.strip():
+                # Extract category from the line (assuming format like "Category X: item")
+                parts = line.split(':')
+                if len(parts) > 1:
+                    category = parts[0].strip()
+                    if category.startswith("Category ") and len(category) > 9:
+                        cat_letter = category[9:].strip()
+                        if cat_letter and cat_letter not in categories:
+                            categories.append(cat_letter)
+                            
+        # Also check for section headers like "----- Category X ($xx.xx - $xx.xx) -----"
+        category_pattern = r'----- Category ([A-Z]) \(\$[\d.]+ - \$[\d.]+\) -----'
+        section_matches = re.findall(category_pattern, menu_content)
+        for match in section_matches:
+            if match not in categories:
+                categories.append(match)
+    except Exception as e:
+        print(f"Warning: Error parsing categories: {e}")
+        # Fallback to default categories if parsing fails
+        categories = ["A", "B", "C", "D"]
+
+    # If no categories were found, use default
+    if not categories:
+        print("No categories detected. Using default categories A, B, C, D.")
+        categories = ["A", "B", "C", "D"]
+
+    # Sort categories alphabetically
+    categories.sort()
     
-    # Create prompt with the file content
+    # Check if beverage categories Y and Z exist
+    has_beverages = "Y" in categories or "Z" in categories
+    
+    # Identify main dish categories (typically A and B)
+    main_dish_categories = []
+    if "A" in categories:
+        main_dish_categories.append("A")
+    if "B" in categories:
+        main_dish_categories.append("B")
+    
+    # Identify side dish and appetizer categories (typically C and D)
+    side_categories = []
+    for cat in categories:
+        if cat not in ["Y", "Z"] and cat not in main_dish_categories:
+            side_categories.append(cat)
+            
+    print(f"Detected categories: {categories}")
+    if has_beverages:
+        print("Beverage categories detected. Will apply special portion rules.")
+        
+    category_portions_text = "\n".join([f"Category {cat}: [number of items]" for cat in categories])
+
+    # Update prompt with portion rules
     prompt = f"""
-    Based on these categorised menu data:
-    
-    {menu_content}
-    
-    Please create 4 UNIQUE menu bundles for a varying number of diners (1-6 diners). Each bundle must include some items from each available menu category (A, B, C, and D if present).
-    
-    For each menu bundle, include:
-    1. The number of menu items from each category
-    2. The number of diners the bundle is designed for
-    3. The price per diner
-    4. A suggested discounted bundle price
+Based on these categorised menu data:
+{menu_content}
 
-    Please follow this exact structure for each menu bundle:
-    Suggested bundle price:
-    Number of diners:
-    category_portions:
-        Category A: [number of items]
-        Category B: [number of items]
-        Category C: [number of items]
-        Category D: [number of items]
-    Original bundle price:
-    Discount percentage:
-    Price per diner:
-    
-    Note: Include all four categories (A through D) in your response, even if some categories might have 0 items in certain bundles.
-    """
+The user has indicated an average spend of ${average_spend_per_diner:.2f} per diner.
+Please create 4 UNIQUE menu bundles for a varying number of diners (1-6 diners). Each bundle must include some items from each available menu category ({", ".join(categories)}) where appropriate, following these CRITICAL portion rules:
 
-    model = "gemini-2.5-pro-exp-03-25"
-    contents = [
-        types.Content(
-            role="user",
-            parts=[
-                types.Part.from_text(text=prompt),
-            ],
-        ),
-    ]
-    generate_content_config = types.GenerateContentConfig(
-        response_mime_type="application/json",
-        system_instruction=[
-            types.Part.from_text(text="""You are a menu bundle generator, and your task is to create 4 UNIQUE menu bundles based on a given input of menu categories. Each bundle should be distinctly different from the others. For each bundle:
-            
-1. Include items from all available categories (A, B, C, and D)
+1. For beverage categories (Y and Z):
+   - Each diner should get exactly ONE drink maximum
+   - Total beverages should NEVER exceed the number of diners
+   - Alcoholic beverages (Z) should not exceed the number of diners
+   - Non-alcoholic beverages (Y) should not exceed the number of diners
+
+2. For main dish categories ({", ".join(main_dish_categories)}):
+   - Each diner should get 1-2 main dishes maximum
+   - For 1-2 diners: 1-3 main dishes total
+   - For 3-4 diners: 3-6 main dishes total
+   - For 5-6 diners: 5-9 main dishes total
+
+3. For sides, appetizers, and dessert categories ({", ".join(side_categories)}):
+   - These are shared items
+   - For 1-2 diners: 1-2 items from each category
+   - For 3-4 diners: 2-3 items from each category
+   - For 5-6 diners: 3-4 items from each category
+
+When creating these bundles, try to ensure the "Price_per_diner" (after discount) is around this average spend of ${average_spend_per_diner:.2f}. It should either be less than 15% or more than 15%.
+
+For each menu bundle, include:
+The number of menu items from each category
+The number of diners the bundle is designed for
+The price per diner (should be around ${average_spend_per_diner:.2f})
+A suggested discounted bundle price
+Please follow this exact structure for each menu bundle:
+Suggested_bundle_price:
+Number_of_diners:
+category_portions:
+{category_portions_text}
+Original_bundle_price:
+Discount_percentage:
+Price_per_diner:
+Note: Include all categories in your response, even if some categories might have 0 items in certain bundles.
+"""
+    model_name = "gemini-2.5-pro-exp-03-25"
+    print(f"Using model: {model_name}")
+
+    # Update system instruction with more detailed portion guidelines
+    system_instruction_text = f"""You are a menu bundle generator, and your task is to create 4 UNIQUE menu bundles based on a given input of menu categories and a target average spend per diner.
+
+The user has specified an average spend of ${average_spend_per_diner:.2f} per diner. This is a key factor.
+
+Each bundle should be distinctly different from the others and follow these STRICT portion rules:
+
+1. BEVERAGES (Categories Y and Z):
+   - Each diner gets exactly ONE drink maximum (never more drinks than diners)
+   - Alcoholic beverages (Category Z) should never exceed the number of diners
+   - Non-alcoholic beverages (Category Y) should never exceed the number of diners
+   - Example: For 2 diners, include at MOST 2 drinks total
+
+2. MAIN DISHES (Categories {", ".join(main_dish_categories)}):
+   - Allocate 1-2 main dishes per diner maximum
+   - For 1-2 diners: 1-3 main dishes total
+   - For 3-4 diners: 3-6 main dishes total
+   - For 5-6 diners: 5-9 main dishes total
+
+3. SIDES, APPETIZERS, DESSERTS (Categories {", ".join(side_categories)}):
+   - These are usually shared items
+   - For 1-2 diners: include 1-2 items from each category
+   - For 3-4 diners: include 2-3 items from each category
+   - For 5-6 diners: include 3-4 items from each category
+
+For each bundle:
+1. Include items from all available categories ({", ".join(["Category " + cat for cat in categories])})
 2. Specify exactly how many portions from each category are included
-3. Calculate the original price based on the actual menu prices
-4. Apply a reasonable discount (10-20%)
-5. Calculate the per-person price
-            
-Always include all four categories (A through D) in your response structure, even if some categories have 0 items or don't exist in the input data."""),
-        ],
+3. Calculate the original price based on the actual menu prices from the input data
+4. Apply a reasonable discount (aim for 10-20%)
+5. The "Price_per_diner" after the discount should be as close as possible to the user's specified average spend of ${average_spend_per_diner:.2f}
+
+Always include all categories in your response structure, even if some categories have 0 items or don't exist in the input data."""
+
+    try:
+        gemini_model = genai.GenerativeModel(
+            model_name=model_name,
+            system_instruction=system_instruction_text
+        )
+    except AttributeError as e:
+        print(f"AttributeError during genai.GenerativeModel: {e}")
+        print("This strongly suggests an issue with the 'google-generativeai' library installation or version.")
+        print("Please ensure you have the latest version installed (pip install --upgrade google-generativeai) and restart your kernel.")
+        return
+    except Exception as e:
+        print(f"Error initializing GenerativeModel: {e}")
+        return
+
+    contents = [
+    {
+        "role": "user", 
+        "parts": [{"text": prompt}]
+    }
+    ]
+
+    generation_config_for_method = GenerationConfig(
+        response_mime_type="application/json",
     )
 
-    # Collect the entire response
     complete_response = ""
-    
+    print("\nGenerating menu bundles. This may take a moment...")
     try:
-        # Get the response generator
-        response_stream = client.models.generate_content_stream(
-            model=model,
+        response_stream = gemini_model.generate_content(
             contents=contents,
-            config=generate_content_config,
+            generation_config=generation_config_for_method,
+            stream=True
         )
-        
-        # Check if response is None
+
         if response_stream is None:
-            print("Warning: API returned None for response stream")
-            # Try non-streaming version as fallback
-            try:
-                print("Attempting to use non-streaming API as fallback...")
-                response = client.models.generate_content(
-                    model=model,
-                    contents=contents,
-                    config=generate_content_config,
-                )
-                
-                if response and hasattr(response, 'text'):
-                    complete_response = response.text
-                elif response and hasattr(response, 'parts'):
-                    for part in response.parts:
-                        if hasattr(part, 'text') and part.text is not None:
-                            complete_response += part.text
-                else:
-                    print("Warning: Fallback response format is unexpected")
-            except Exception as fallback_error:
-                print(f"Fallback request also failed: {fallback_error}")
+            print("Warning: API returned None for response stream. This is unexpected with streaming.")
+            # Fallback logic (as you had)
+            # ...
         else:
-            # Iterate through streaming response if it's not None
             for chunk in response_stream:
-                # Handle the case where chunk.text might be None
-                # Get the text from different potential structures
                 chunk_text = ""
-                
-                # Try direct text property
                 if hasattr(chunk, 'text') and chunk.text is not None:
                     chunk_text = chunk.text
-                # Try looking in parts
                 elif hasattr(chunk, 'parts') and chunk.parts:
-                    # Combine text from all parts
                     for part in chunk.parts:
                         if hasattr(part, 'text') and part.text is not None:
                             chunk_text += part.text
-                # Try candidates structure
                 elif hasattr(chunk, 'candidates') and chunk.candidates:
                     for candidate in chunk.candidates:
-                        if hasattr(candidate, 'content'):
-                            content = candidate.content
-                            if hasattr(content, 'parts'):
-                                for part in content.parts:
-                                    if hasattr(part, 'text') and part.text is not None:
-                                        chunk_text += part.text
+                        if hasattr(candidate, 'content') and candidate.content and hasattr(candidate.content, 'parts'):
+                            for part in candidate.content.parts:
+                                if hasattr(part, 'text') and part.text is not None:
+                                    chunk_text += part.text
                 
-                # Add to the complete response
                 complete_response += chunk_text
-                
-                # Print to console
                 if chunk_text:
-                    print(chunk_text, end="")
+                    print(chunk_text, end="", flush=True)
                 else:
-                    print(".", end="")  # Print a dot to indicate progress for empty chunks
-                
+                    print(".", end="", flush=True)
+            print()
+
     except Exception as e:
         print(f"\n\nError during generation: {e}")
-        
-        # Last-ditch effort - try non-streaming API if streaming failed
+        # Fallback logic (as you had)
         if not complete_response:
             try:
                 print("Attempting to use non-streaming API as final fallback...")
-                response = client.models.generate_content(
-                    model=model,
+                response = gemini_model.generate_content(
                     contents=contents,
-                    config=generate_content_config,
+                    generation_config=generation_config_for_method,
                 )
-                
+                # ... (rest of your fallback logic) ...
                 if hasattr(response, 'text') and response.text:
                     complete_response = response.text
-                    print(f"Received {len(complete_response)} characters from fallback request")
+                    print(f"\nReceived {len(complete_response)} characters from fallback request")
+                elif response and hasattr(response, 'parts'):
+                    for part_ in response.parts: # renamed to avoid conflict
+                        if hasattr(part_, 'text') and part_.text is not None:
+                            complete_response += part_.text
+                    print(f"\nReceived {len(complete_response)} characters from fallback request (from parts)")
+                else:
+                    print("\nFallback response was empty or in an unexpected format.")
             except Exception as fallback_error:
                 print(f"Fallback request also failed: {fallback_error}")
-    
+
+
+    # ... (rest of your JSON parsing and saving code) ...
     # Save the raw response for debugging
     try:
         menu_bundles_raw_file = os.path.join(
@@ -774,89 +871,166 @@ Always include all four categories (A through D) in your response structure, eve
             secure_filename(restaurant_name),
             f"menu_bundles_raw_{secure_filename(restaurant_name)}.txt"
         )
-        with open(menu_bundles_raw_file, "w", encoding="utf-8") as f:
+        with open(menu_bundles_raw_file, "w", encoding="utf-8") as f:        
             f.write(complete_response)
+        print(f"\nRaw response saved to menu_bundles_raw.txt ({len(complete_response)} chars)")
     except Exception as e:
         print(f"Error saving raw response: {e}")
-    
-    # Parse and save as JSON
+
+    # Parse and save as JSON (your existing logic from here is likely fine)
     try:
-        print("\n\nParsing response as JSON...")
-        
-        # Check if the response is empty
+        print("\nParsing response as JSON...")
         if not complete_response.strip():
             raise ValueError("Empty response received from API")
-            
-        # Try direct JSON parsing first
+
         all_valid_jsons = []
-        unique_bundles = set()  # Use a set to track unique bundles
-        
+        unique_bundles = set()
+
+        cleaned_response = complete_response.strip()
+        if cleaned_response.startswith("```json"):
+            cleaned_response = cleaned_response[7:]
+        if cleaned_response.startswith("```"): # Handle just ``` without json
+             cleaned_response = cleaned_response[3:]
+        if cleaned_response.endswith("```"):
+            cleaned_response = cleaned_response[:-3]
+        cleaned_response = cleaned_response.strip()
+
+
         try:
-            # First, try parsing the entire response as a single JSON object
-            json_data = json.loads(complete_response)
+            # First, try parsing the (cleaned) entire response as a single JSON object (likely a list of bundles)
+            json_data = json.loads(cleaned_response)
             if isinstance(json_data, list):
-                # If it's a list, use it directly
-                all_valid_jsons = json_data[:4]  # Limit to 4 bundles
+                all_valid_jsons = json_data[:4]
+            elif isinstance(json_data, dict) and "bundles" in json_data and isinstance(json_data["bundles"], list):
+                all_valid_jsons = json_data["bundles"][:4]
+            elif isinstance(json_data, dict): # If it's a single bundle object
+                 all_valid_jsons = [json_data]
             else:
-                # If it's an object, check if it has a 'bundles' property
-                if "bundles" in json_data and isinstance(json_data["bundles"], list):
-                    json_data["bundles"] = json_data["bundles"][:4]  # Limit to 4 bundles
-                all_valid_jsons = [json_data]
-        except json.JSONDecodeError:
-            print("Direct JSON parsing failed, trying extraction methods...")
+                print("Parsed JSON is not in expected list or dict format, proceeding to regex.")
+                raise json.JSONDecodeError("Not a list or expected dict", cleaned_response, 0) # Force fallback
+
+        except json.JSONDecodeError as e:
+            print(f"Direct JSON parsing failed: {e}. Trying extraction methods on raw response...")
             
-            # Look for JSON objects pattern
-            json_pattern = r'(\{(?:[^{}]|(?:\{(?:[^{}]|(?:\{[^{}]*\}))*\}))*\})'
+            # Use the original complete_response for regex matching if direct parsing fails
+            json_pattern = r'(\{(?:[^{}]|(?:\{(?:[^{}]|(?:\{[^{}]*\}))*\}))*\})' # More robust pattern
             json_matches = re.findall(json_pattern, complete_response)
-            
+
             if json_matches:
-                # Try each potential JSON match
-                potential_jsons = sorted(json_matches, key=len, reverse=True)
+                potential_jsons = sorted(list(set(json_matches)), key=len, reverse=True) # Unique matches
                 
-                for potential_json in potential_jsons:
+                for potential_json_str in potential_jsons:
+                    if len(all_valid_jsons) >= 4:
+                        break
                     try:
-                        json_data = json.loads(potential_json)
-                        # Convert to string for comparison to check uniqueness
-                        json_str = json.dumps(json_data, sort_keys=True)
-                        if json_str not in unique_bundles:
-                            unique_bundles.add(json_str)
+                        # Clean up potential JSON string further if needed
+                        # (e.g., remove leading/trailing non-JSON characters if pattern is too greedy)
+                        clean_potential_json = potential_json_str.strip()
+                        if not (clean_potential_json.startswith('{') and clean_potential_json.endswith('}')):
+                            continue # Skip if not a valid JSON object structure
+
+                        json_data = json.loads(clean_potential_json)
+                        json_str_for_uniqueness = json.dumps(json_data, sort_keys=True)
+                        if json_str_for_uniqueness not in unique_bundles:
+                            unique_bundles.add(json_str_for_uniqueness)
                             all_valid_jsons.append(json_data)
                     except json.JSONDecodeError:
                         continue
             
-            # Also try code blocks
-            code_block_matches = re.findall(r'```(?:json)?(.*?)```', complete_response, re.DOTALL)
-            for code_block in code_block_matches:
-                try:
-                    json_data = json.loads(code_block.strip())
-                    # Check uniqueness again
-                    json_str = json.dumps(json_data, sort_keys=True)
-                    if json_str not in unique_bundles:
-                        unique_bundles.add(json_str)
-                        all_valid_jsons.append(json_data)
-                except json.JSONDecodeError:
-                    continue
-        
-        # Ensure we have only 4 bundles maximum
+            # Also try code blocks from the original complete_response
+            if len(all_valid_jsons) < 4:
+                code_block_matches = re.findall(r'```(?:json)?\s*([\s\S]*?)\s*```', complete_response, re.DOTALL)
+                for code_block in code_block_matches:
+                    if len(all_valid_jsons) >= 4:
+                        break
+                    try:
+                        # If the code block itself contains a list of bundles
+                        json_data_block = json.loads(code_block.strip())
+                        if isinstance(json_data_block, list):
+                            for item in json_data_block:
+                                if len(all_valid_jsons) >= 4:
+                                    break
+                                json_str_for_uniqueness = json.dumps(item, sort_keys=True)
+                                if json_str_for_uniqueness not in unique_bundles:
+                                    unique_bundles.add(json_str_for_uniqueness)
+                                    all_valid_jsons.append(item)
+                        elif isinstance(json_data_block, dict): # A single bundle
+                            json_str_for_uniqueness = json.dumps(json_data_block, sort_keys=True)
+                            if json_str_for_uniqueness not in unique_bundles:
+                                unique_bundles.add(json_str_for_uniqueness)
+                                all_valid_jsons.append(json_data_block)
+                    except json.JSONDecodeError:
+                        # If parsing the whole block fails, try finding individual JSON objects within it
+                        inner_json_matches = re.findall(json_pattern, code_block)
+                        for inner_match_str in inner_json_matches:
+                            if len(all_valid_jsons) >= 4:
+                                break
+                            try:
+                                inner_json_data = json.loads(inner_match_str.strip())
+                                json_str_for_uniqueness = json.dumps(inner_json_data, sort_keys=True)
+                                if json_str_for_uniqueness not in unique_bundles:
+                                    unique_bundles.add(json_str_for_uniqueness)
+                                    all_valid_jsons.append(inner_json_data)
+                            except json.JSONDecodeError:
+                                continue
+
+        # Ensure we have only 4 bundles maximum from all combined efforts
         if len(all_valid_jsons) > 4:
             all_valid_jsons = all_valid_jsons[:4]
-        
-        # Save all valid JSONs to a single file
+
         if all_valid_jsons:
-            menu_bundles_file = os.path.join(
-                app.config['UPLOAD_FOLDER'],
-                secure_filename(restaurant_name),
-                f"menu_bundles_{secure_filename(restaurant_name)}.json"
-            )
-            with open(menu_bundles_file, "w", encoding="utf-8") as json_file:
-                json.dump(all_valid_jsons, json_file, indent=4)
-            print(f"Saved {len(all_valid_jsons)} unique menu bundles to {menu_bundles_file}")
-        else:
-            print("No valid JSONs found in the response")
+            # Validate structure of each bundle (optional but good)
+            final_bundles = []
+            for bundle in all_valid_jsons:
+                if isinstance(bundle, dict) and "Suggested_bundle_price" in bundle and "Number_of_diners" in bundle and "category_portions" in bundle:
+                    # Add basic portion validation
+                    diners = bundle.get("Number_of_diners", 0)
+                    portions = bundle.get("category_portions", {})
+                    
+                    # Check beverage portions if applicable
+                    valid_portions = True
+                    if has_beverages:
+                        total_beverages = 0
+                        for bev_cat in ["Y", "Z"]:
+                            if bev_cat in portions:
+                                bev_count = int(portions[bev_cat]) if isinstance(portions[bev_cat], (int, str)) else 0
+                                if bev_count > diners:
+                                    print(f"Warning: Bundle has {bev_count} beverages from category {bev_cat} for {diners} diners")
+                                    valid_portions = False
+                                total_beverages += bev_count
+                        
+                        if total_beverages > diners:
+                            print(f"Warning: Bundle has {total_beverages} total beverages for {diners} diners")
+                            valid_portions = False
+                    
+                    # We'll include it anyway but log warnings
+                    if valid_portions:
+                        print(f"Valid bundle created for {diners} diners")
+                    final_bundles.append(bundle)
+                else:
+                    print(f"Warning: A parsed JSON object does not match expected bundle structure: {bundle}")
             
+            if final_bundles:
+                menu_bundles_file = os.path.join(
+                    app.config['UPLOAD_FOLDER'],
+                    secure_filename(restaurant_name),
+                    f"menu_bundles_{secure_filename(restaurant_name)}.json"
+                )
+                with open(menu_bundles_file, "w", encoding="utf-8") as json_file:
+                    json.dump(all_valid_jsons, json_file, indent=4)
+                print(f"Saved {len(all_valid_jsons)} unique menu bundles to {menu_bundles_file}")
+            else:
+                print("No valid JSONs found in the response")
+        else:
+            print("No valid JSONs found in the response after all parsing attempts.")
+            print("Please check menu_bundles_raw.txt to see the actual response.")
+
+    except ValueError as ve: # For the "Empty response" case
+        print(f"Error: {ve}")
+        print("Please check menu_bundles_raw.txt.")
     except Exception as e:
         print(f"Error: Failed to parse response as JSON: {e}")
-        print(f"Please check {menu_bundles_raw_file} to see the actual response.")
+        print("Please check menu_bundles_raw.txt to see the actual response.")
 
 def parse_menu_items_for_excel(file_path='./categorized_menu_items.txt'):
     """
@@ -1140,10 +1314,10 @@ def create_hungry_hub_proposal(json_file='./menu_bundles.json', menu_file='./cat
         logging.warning("Using default menu bundles as fallback.")
         # Default bundles definition (no changes needed)
         menu_bundles = [
-            { "bundle_name": "Default A", "suggested_bundle_price": "$3000", "number_of_diners": 6, "category_portions": {"Category A": 3, "Category B": 4, "Category C": 2, "Category D": 1}, "original_bundle_price": "$3500", "discount_percentage": "15%", "price_per_diner": "$500" },
-            { "bundle_name": "Default B", "suggested_bundle_price": "$4000", "number_of_diners": 8, "category_portions": {"Category A": 4, "Category B": 6, "Category C": 3, "Category D": 2}, "original_bundle_price": "$4800", "discount_percentage": "20%", "price_per_diner": "$500" },
-            { "bundle_name": "Default C", "suggested_bundle_price": "$5000", "number_of_diners": 10, "category_portions": {"Category A": 5, "Category B": 8, "Category C": 4, "Category D": 3}, "original_bundle_price": "$6000", "discount_percentage": "17%", "price_per_diner": "$500" },
-            { "bundle_name": "Default D", "suggested_bundle_price": "$6000", "number_of_diners": 12, "category_portions": {"Category A": 6, "Category B": 10, "Category C": 5, "Category D": 4}, "original_bundle_price": "$7200", "discount_percentage": "17%", "price_per_diner": "$500" }
+            { "bundle_name": "Default A", "Suggested_bundle_price": "$3000", "Number_of_diners": 6, "category_portions": {"Category A": 3, "Category B": 4, "Category C": 2, "Category D": 1}, "Original_bundle_price": "$3500", "Discount_percentage": "15%", "Price_per_diner": "$500" },
+            { "bundle_name": "Default B", "Suggested_bundle_price": "$4000", "Number_of_diners": 8, "category_portions": {"Category A": 4, "Category B": 6, "Category C": 3, "Category D": 2}, "Original_bundle_price": "$4800", "Discount_percentage": "20%", "Price_per_diner": "$500" },
+            { "bundle_name": "Default C", "Suggested_bundle_price": "$5000", "Number_of_diners": 10, "category_portions": {"Category A": 5, "Category B": 8, "Category C": 4, "Category D": 3}, "Original_bundle_price": "$6000", "Discount_percentage": "17%", "Price_per_diner": "$500" },
+            { "bundle_name": "Default D", "Suggested_bundle_price": "$6000", "Number_of_diners": 12, "category_portions": {"Category A": 6, "Category B": 10, "Category C": 5, "Category D": 4}, "Original_bundle_price": "$7200", "Discount_percentage": "17%", "Price_per_diner": "$500" }
         ]
         menu_bundles = menu_bundles[:4] # Ensure exactly 4
 
@@ -1198,7 +1372,7 @@ def create_hungry_hub_proposal(json_file='./menu_bundles.json', menu_file='./cat
         cell_range = f"{col_start}4:{col_end}4"; worksheet.merge_cells(cell_range)
 
         # *** FIX 1 START ***
-        price_value_raw = menu_bundles[pack['bundle_index']].get('suggested_bundle_price', 0) # Default to number 0
+        price_value_raw = menu_bundles[pack['bundle_index']].get('Suggested_bundle_price', 0) # Default to number 0
         price = 0.0 # Initialize price
         try:
             if isinstance(price_value_raw, str):
@@ -1209,10 +1383,10 @@ def create_hungry_hub_proposal(json_file='./menu_bundles.json', menu_file='./cat
                 price = float(price_value_raw)
             else:
                 # Handle unexpected types if necessary
-                logging.warning(f"Unexpected type for suggested_bundle_price: {type(price_value_raw)}. Using 0.")
+                logging.warning(f"Unexpected type for Suggested_bundle_price: {type(price_value_raw)}. Using 0.")
                 price = 0.0
         except ValueError:
-            logging.warning(f"Could not convert suggested_bundle_price '{price_value_raw}' to float. Using 0.")
+            logging.warning(f"Could not convert Suggested_bundle_price '{price_value_raw}' to float. Using 0.")
             price = 0.0
         # *** FIX 1 END ***
 
@@ -1225,7 +1399,7 @@ def create_hungry_hub_proposal(json_file='./menu_bundles.json', menu_file='./cat
     for pack in pack_definitions:
         col_start, col_end = pack['columns'].split(':')
         cell_range = f"{col_start}5:{col_end}5"; worksheet.merge_cells(cell_range)
-        diners = menu_bundles[pack['bundle_index']].get('number_of_diners', 0)
+        diners = menu_bundles[pack['bundle_index']].get('Number_of_diners', 0)
         cell = worksheet[col_start + '5']
         cell.value = diners; cell.number_format = '0'; cell.alignment = center_aligned; cell.fill = light_yellow_fill
 
@@ -1320,7 +1494,7 @@ def create_hungry_hub_proposal(json_file='./menu_bundles.json', menu_file='./cat
         cell_range = f"{col_start}14:{col_end}14"; worksheet.merge_cells(cell_range)
 
         # *** FIX 2 START ***
-        price_value_raw = menu_bundles[pack['bundle_index']].get('original_bundle_price', 0) # Default to number 0
+        price_value_raw = menu_bundles[pack['bundle_index']].get('Original_bundle_price', 0) # Default to number 0
         price = 0.0 # Initialize price
         try:
             if isinstance(price_value_raw, str):
@@ -1331,10 +1505,10 @@ def create_hungry_hub_proposal(json_file='./menu_bundles.json', menu_file='./cat
                 price = float(price_value_raw)
             else:
                 # Handle unexpected types if necessary
-                logging.warning(f"Unexpected type for original_bundle_price: {type(price_value_raw)}. Using 0.")
+                logging.warning(f"Unexpected type for Original_bundle_price: {type(price_value_raw)}. Using 0.")
                 price = 0.0
         except ValueError:
-            logging.warning(f"Could not convert original_bundle_price '{price_value_raw}' to float. Using 0.")
+            logging.warning(f"Could not convert Original_bundle_price '{price_value_raw}' to float. Using 0.")
             price = 0.0
         # *** FIX 2 END ***
 
@@ -1347,7 +1521,7 @@ def create_hungry_hub_proposal(json_file='./menu_bundles.json', menu_file='./cat
     for pack in pack_definitions:
         col_start, col_end = pack['columns'].split(':')
         cell_range = f"{col_start}15:{col_end}{15}"; worksheet.merge_cells(cell_range)
-        discount_value_raw = menu_bundles[pack['bundle_index']].get('discount_percentage', '0%')
+        discount_value_raw = menu_bundles[pack['bundle_index']].get('Discount_percentage', '0%')
         try:
             if isinstance(discount_value_raw, str):
                 # If it's a string like "15%", clean and convert
@@ -1362,7 +1536,7 @@ def create_hungry_hub_proposal(json_file='./menu_bundles.json', menu_file='./cat
                 number_format = '0%'
             else:
                 # Handle unexpected type
-                logging.warning(f"Unexpected type for discount_percentage: {type(discount_value_raw)}. Using 0%.")
+                logging.warning(f"Unexpected type for Discount_percentage: {type(discount_value_raw)}. Using 0%.")
                 discount_val = 0.0
                 number_format = '0%'
         except ValueError:
@@ -1379,30 +1553,30 @@ def create_hungry_hub_proposal(json_file='./menu_bundles.json', menu_file='./cat
         cell_range = f"{col_start}16:{col_end}16"; worksheet.merge_cells(cell_range)
 
         # *** FIX 3 START (More robust handling) ***
-        price_per_diner_val = menu_bundles[pack['bundle_index']].get('price_per_diner', '0') # Default to string '0'
+        Price_per_diner_val = menu_bundles[pack['bundle_index']].get('Price_per_diner', '0') # Default to string '0'
         display_text = "0 / Person" # Default display text
         try:
             price_num = 0.0
-            if isinstance(price_per_diner_val, str):
+            if isinstance(Price_per_diner_val, str):
                 # If it's a string like "$500" or "500", clean and convert
-                price_num = float(price_per_diner_val.replace('$', '').replace(',', ''))
-            elif isinstance(price_per_diner_val, (int, float)):
+                price_num = float(Price_per_diner_val.replace('$', '').replace(',', ''))
+            elif isinstance(Price_per_diner_val, (int, float)):
                 # If it's already a number
-                price_num = float(price_per_diner_val)
+                price_num = float(Price_per_diner_val)
             else:
                 # Handle unexpected type, keep price_num as 0.0
-                logging.warning(f"Unexpected type for price_per_diner: {type(price_per_diner_val)}. Using 0.")
+                logging.warning(f"Unexpected type for Price_per_diner: {type(Price_per_diner_val)}. Using 0.")
 
             display_text = f"{price_num:,.0f} / Person" # Format the extracted number
 
         except ValueError:
             # If conversion failed, use the original value (as string) in the display
-            logging.warning(f"Could not convert price_per_diner '{price_per_diner_val}' to number. Displaying as is.")
-            display_text = f"{price_per_diner_val} / Person"
+            logging.warning(f"Could not convert Price_per_diner '{Price_per_diner_val}' to number. Displaying as is.")
+            display_text = f"{Price_per_diner_val} / Person"
         except Exception as e:
             # Catch potential formatting errors, though unlikely here
-            logging.error(f"Error formatting price_per_diner '{price_per_diner_val}': {e}. Displaying as is.")
-            display_text = f"{price_per_diner_val} / Person" # Fallback
+            logging.error(f"Error formatting Price_per_diner '{Price_per_diner_val}': {e}. Displaying as is.")
+            display_text = f"{Price_per_diner_val} / Person" # Fallback
         # *** FIX 3 END ***
 
         cell = worksheet[col_start + '16']
@@ -1588,8 +1762,9 @@ def process_menu():
 @app.route('/api/generate-bundles', methods=['POST'])
 def generate_bundles():
     restaurant_name = request.json.get('restaurantName')
+    average_spend = request.json.get('averagePrice')
     try:
-        generate()
+        generate(restaurant_name, average_spend)
         # Check if output file exists
         menu_bundles_file = os.path.join(
             app.config['UPLOAD_FOLDER'],
