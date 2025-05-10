@@ -1759,6 +1759,62 @@ def process_menu():
             "error": str(e)
         }), 500
 
+@app.route('/api/get-categorized-menu', methods=['POST'])
+def get_categorized_menu_text():
+    try:
+        restaurant_name = request.json.get('restaurantName')
+        if not restaurant_name:
+            return jsonify({"error": "Restaurant name is required"}), 400
+
+        file_path = os.path.join(
+            app.config['UPLOAD_FOLDER'],
+            secure_filename(restaurant_name),
+            f"categorized_menu_items_{secure_filename(restaurant_name)}.txt"
+        )
+
+        if not os.path.exists(file_path):
+            app.logger.error(f"Categorized menu file not found at {file_path}")
+            return jsonify({"error": f"Categorized menu file not found for {restaurant_name}. It might not have been generated yet or an error occurred."}), 404
+
+        with open(file_path, 'r', encoding='utf-8') as f:
+            menu_text_content = f.read()
+        
+        return jsonify({"menuText": menu_text_content}), 200
+
+    except Exception as e:
+        app.logger.error(f"Error fetching categorized menu text: {str(e)}")
+        return jsonify({"error": "Internal server error while fetching menu text", "details": str(e)}), 500
+
+@app.route('/api/update-categorized-menu', methods=['POST'])
+def update_categorized_menu_text():
+    try:
+        restaurant_name = request.json.get('restaurantName')
+        updated_menu_text = request.json.get('menuText')
+        
+        if not restaurant_name:
+            return jsonify({"error": "Restaurant name is required"}), 400
+        if updated_menu_text is None:
+            return jsonify({"error": "Menu text is required"}), 400
+
+        file_path = os.path.join(
+            app.config['UPLOAD_FOLDER'],
+            secure_filename(restaurant_name),
+            f"categorized_menu_items_{secure_filename(restaurant_name)}.txt"
+        )
+
+        # Create directory if it doesn't exist (shouldn't happen but just in case)
+        os.makedirs(os.path.dirname(file_path), exist_ok=True)
+        
+        with open(file_path, 'w', encoding='utf-8') as f:
+            f.write(updated_menu_text)
+        
+        app.logger.info(f"Updated menu text saved for restaurant: {restaurant_name}")
+        return jsonify({"success": True, "message": "Menu text updated successfully"}), 200
+
+    except Exception as e:
+        app.logger.error(f"Error updating categorized menu text: {str(e)}")
+        return jsonify({"error": "Internal server error while updating menu text", "details": str(e)}), 500
+
 @app.route('/api/generate-bundles', methods=['POST'])
 def generate_bundles():
     restaurant_name = request.json.get('restaurantName')
