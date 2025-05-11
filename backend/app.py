@@ -75,91 +75,93 @@ def encode_image(image_path):
 
 def extract_text_from_image(api_key, image_paths, prompt_text):
     """
-    Use Claude to extract text from multiple images.
+    Use Gemini to extract text from multiple images.
 
-    :param api_key: Your Anthropic API key
+    :param api_key: Your Google API key
     :param image_paths: List of paths to image files
-    :param prompt_text: Text prompt for Claude
+    :param prompt_text: Text prompt for Gemini
     :return: Extracted text from the images
     """
-    # Initialize the Anthropic client
-    client = Anthropic(api_key=api_key)
+    # Configure the Gemini API
+    try:
+        genai.configure(api_key=api_key)
+    except Exception as e:
+        logging.error(f"Error configuring Gemini API: {e}")
+        return None
 
     try:
-        # Create content array
-        content = []
+        # Initialize the Gemini model
+        model = genai.GenerativeModel('gemini-1.5-pro-latest')
 
-        # Add each image to the content array
+        # Prepare parts for the request
+        parts = []
         image_added = False
+        
+        # Process each image
         for image_path in image_paths:
-            # Determine media type based on file extension
-            media_type = "image/jpeg"  # Default
-            if image_path.lower().endswith(".png"):
-                media_type = "image/png"
-            elif image_path.lower().endswith(".gif"):
-                media_type = "image/gif"
-            elif image_path.lower().endswith(".webp"):
-                media_type = "image/webp" # Add webp support
-
-
-            # Encode the image
-            logging.info(f"Encoding image: {os.path.basename(image_path)}")
-            base64_image = encode_image(image_path)
-
-            if base64_image:
-                # Add image to content array
-                content.append({
-                    "type": "image",
-                    "source": {
-                        "type": "base64",
-                        "media_type": media_type,
-                        "data": base64_image
+            try:
+                # Read the image file directly
+                with open(image_path, "rb") as image_file:
+                    image_data = image_file.read()
+                
+                # Determine mime type based on file extension
+                ext = os.path.splitext(image_path)[1][1:].lower()
+                mime_type = "image/jpeg"  # Default
+                if ext == "png":
+                    mime_type = "image/png"
+                elif ext == "gif":
+                    mime_type = "image/gif"
+                elif ext == "webp":
+                    mime_type = "image/webp"
+                
+                # Add image to parts
+                parts.append({
+                    "inline_data": {
+                        "mime_type": mime_type,
+                        "data": base64.b64encode(image_data).decode('utf-8')
                     }
                 })
                 image_added = True
-            else:
-                logging.warning(f"Skipping image due to encoding error: {os.path.basename(image_path)}")
-
+                logging.info(f"Added image: {os.path.basename(image_path)}")
+            except Exception as e:
+                logging.warning(f"Error processing image {image_path}: {e}")
+        
         if not image_added:
-            logging.error("No images could be successfully encoded and added.")
+            logging.error("No images could be successfully processed.")
             return None
+        
+        # Add the text prompt
+        parts.append({"text": prompt_text})
 
-        # Add text prompt at the end
-        content.append({
-            "type": "text",
-            "text": prompt_text
-        })
-
-        # Send request to Claude
-        logging.info("Sending request to Claude API...")
-        response = client.messages.create(
-            model="claude-3-haiku-20240307", # Using Haiku for speed/cost balance
-            # model="claude-3-opus-20240229", # Opus might give better results but is slower/more expensive
-            max_tokens=4000, # Increased max_tokens slightly
-            messages=[
-                {
-                    "role": "user",
-                    "content": content
-                }
-            ]
+        # Send request to Gemini
+        logging.info("Sending request to Gemini API...")
+        response = model.generate_content(
+            parts,
+            generation_config=genai.types.GenerationConfig(
+                max_output_tokens=4000,
+                temperature=0.2,
+                top_p=0.8,
+            )
         )
 
-        # Return the extracted text
-        extracted_text = response.content[0].text
-        logging.info(f"Received response from Claude. Content length: {len(extracted_text)} characters.")
-        # Log first few lines of response for debugging
-        # logging.debug("Claude Response Head:\n" + "\n".join(extracted_text.split('\n')[:5]))
-        return extracted_text
+        # Extract and return the text response
+        if response and hasattr(response, 'text'):
+            extracted_text = response.text
+            logging.info(f"Received response from Gemini. Content length: {len(extracted_text)} characters.")
+            return extracted_text
+        else:
+            logging.error("Received empty or unexpected response format from Gemini.")
+            return None
 
     except Exception as e:
-        logging.error(f"An error occurred during Claude API call: {e}", exc_info=True) # Log traceback
+        logging.error(f"An error occurred during Gemini API call: {e}", exc_info=True)
         return None
 
 def parse_menu_items(extracted_text):
     """
     Parse menu items, prices, and categories from extracted text.
 
-    :param extracted_text: Text extracted from the image by Claude
+    :param extracted_text: Text extracted from the image by Gemini
     :return: Dictionary of menu items {name: {'price': float, 'category': str}}, plus confidence scores {name: float}
     """
     menu_items = {}
@@ -177,23 +179,16 @@ def parse_menu_items(extracted_text):
     unclear_items = 0
     default_category_items = 0
 
-    logging.info(f"Parsing {total_non_empty_lines} non-empty lines from Claude output.")
+    logging.info(f"Parsing {total_non_empty_lines} non-empty lines from Gemini output.")
 
     # --- Refined Regex Patterns ---
     # Price pattern: Handles various currency symbols (optional), commas, and decimals
     # Makes currency symbol and spacing optional. Allows integer prices.
     price_pattern = r'(?:[$€£¥]\s*|\b)(\d+(?:,\d{3})*(?:\.\d{1,2})?)\b'
-    # Regex to find item name, price, and category (assumes format: NAME PRICE CATEGORY)
-    # It tries to be flexible with spacing and potential currency symbols.
-    # Group 1: Item Name (non-greedy)
-    # Group 2: Price (using price_pattern logic)
-    # Group 3: Category (rest of the line)
-    # This regex is complex and might need tuning based on Claude's actual output format.
-    # Let's try a simpler approach first: find price, then split.
 
     for line_num, line in enumerate(lines):
         line = line.strip()
-        # Skip empty lines or potential headers/footers from Claude
+        # Skip empty lines or potential headers/footers from Gemini
         if not line or line.startswith("Here are the items") or line.startswith("---"):
             continue
 
@@ -206,7 +201,6 @@ def parse_menu_items(extracted_text):
             if phrase in line.lower():
                 line_confidence *= 0.6  # Reduce confidence if uncertainty is indicated globally
                 is_unclear = True
-                # break # Found one, no need to check others for this line
 
         # 1. Find the price first (more reliable anchor)
         price_match = re.search(price_pattern, line)
@@ -242,14 +236,13 @@ def parse_menu_items(extracted_text):
                 line_confidence *= 0.8 # Slightly reduce confidence if category was unclear/missing
                 default_category_items += 1
 
-            # Remove any "(unclear)" tags added by Claude from name/category
+            # Remove any "(unclear)" tags added by Gemini from name/category
             item_name = item_name.replace("(unclear)", "").strip()
             category_name = category_name.replace("(unclear)", "").strip()
 
             # If the global 'unclear' flag was set, mark item count
             if is_unclear:
                 unclear_items += 1
-
 
             # Check name/category quality (very short strings might be noise)
             if len(item_name) < 3:
@@ -297,157 +290,216 @@ def parse_menu_items(extracted_text):
     # Log the extraction metrics
     logging.info(f"Parsing complete. Successfully extracted {successful_extractions} items.")
     logging.info(f"Extraction rate: {extraction_rate:.1%} of non-empty lines.")
-    logging.info(f"Items marked unclear by Claude or parser: {unclear_items}")
+    logging.info(f"Items marked unclear by Gemini or parser: {unclear_items}")
     logging.info(f"Items assigned default 'Uncategorized' category: {default_category_items}")
     logging.info(f"Average confidence score for extracted items: {avg_confidence:.1%}")
 
     return menu_items, confidence_scores
 
-def categorize_menu_items(menu_items, num_categories=3):
+def categorize_menu_items_with_beverage_priority(menu_items):
     """
-    Categorize menu items based on their price into groups like A, B, C.
-
+    Categorize menu items with enhanced beverage detection and price validation.
+    
     :param menu_items: Dictionary {name: {'price': float, 'category': str}}
-    :param num_categories: Number of price categories (A, B, C...)
-    :return: Dictionary {price_category: [{'name': str, 'price': float, 'category': str}, ...]}
+    :return: Dictionary {category_letter: [{'name': str, 'price': float, 'category': str}, ...]}
     """
     if not menu_items:
-        logging.warning("No menu items provided for price categorization.")
+        logging.warning("No menu items provided for categorization.")
         return {}
-
-    # Prepare items list: [{'name': name, 'price': price, 'category': category}, ...]
-    items_list = [{'name': name, **data} for name, data in menu_items.items()]
-
-    # Sort items by price (descending)
-    sorted_items_list = sorted(items_list, key=lambda x: x['price'], reverse=True)
-
-    # Determine price ranges
-    prices = [item['price'] for item in sorted_items_list]
-    if not prices: # Should not happen if menu_items is not empty, but safety check
-        return {}
-
-    max_price = max(prices)
-    min_price = min(prices)
-    price_range = max_price - min_price
-
-    logging.info(f"\nPrice range for categorization: ${min_price:.2f} to ${max_price:.2f} (Spread: ${price_range:.2f})")
-
-    # Create categories based on price ranges
-    # Result structure: {'A': [item_dict1, item_dict2], 'B': [...]}
-    categories = defaultdict(list)
-
-    # Handle edge cases: zero range or only one category requested
-    if num_categories <= 1 or price_range == 0:
-        logging.info("Assigning all items to Category A (single category requested or zero price range).")
-        categories['A'].extend(sorted_items_list)
-        return dict(categories) # Convert back to dict from defaultdict
-
-    # --- Adaptive Categorization Logic (from original code) ---
-    # Decide whether to use equal price range division or percentile-based division
-    large_range_threshold = 3.0 # Use adaptive if range > 3x min price
-    use_adaptive = price_range > min_price * large_range_threshold and min_price > 0
-
-    if use_adaptive:
-        logging.info(f"Large price range detected (range/min > {large_range_threshold:.1f}) - using adaptive (percentile-based) categorization.")
-
-        num_items = len(sorted_items_list)
-        category_boundaries = [] # List of lower bounds for categories B, C, D...
-
-        # Calculate boundary prices based on item count percentiles
-        for i in range(1, num_categories):
-            idx = int((i * num_items) / num_categories)
-            # Use the price of the item at the boundary index as the threshold
-            # Ensure index is valid
-            if 0 <= idx < num_items:
-                 # The boundary is the price *below which* items fall into the next category
-                 # So, category A is >= boundary[0], B is < boundary[0] and >= boundary[1], etc.
-                 boundary_price = sorted_items_list[idx]['price']
-                 # Add a small epsilon if needed to handle exact matches at boundaries consistently
-                 # Let's adjust logic: boundary price IS the lower limit for the higher category
-                 category_boundaries.append(boundary_price)
+    
+    # First, clean up any obviously wrong prices
+    cleaned_menu_items = {}
+    for name, item_data in menu_items.items():
+        price = item_data['price']
+        
+        # Fix zero or negative prices (invalid data)
+        if price <= 0:
+            logging.warning(f"Found invalid price for {name}: ${price:.2f}, setting to minimum price of $1.00")
+            item_data['price'] = 1.0  # Set a minimum price to avoid division by zero
+        
+        # Check for unreasonable prices (over 500 baht for a menu item)
+        elif price > 500:
+            logging.warning(f"Found potentially incorrect price for {name}: ${price:.2f}")
+            
+            # Extract price from item name if possible
+            price_match = re.search(r'฿(\d+)', name)
+            if price_match:
+                corrected_price = float(price_match.group(1))
+                logging.info(f"Corrected price from name for {name}: ${corrected_price:.2f}")
+                item_data['price'] = corrected_price
+        
+        cleaned_menu_items[name] = item_data
+    
+    # Prepare items list
+    items_list = [{'name': name, **data} for name, data in cleaned_menu_items.items()]
+    
+    # Initialize categories
+    alcoholic_beverages = []
+    non_alcoholic_beverages = []
+    other_items = []
+    
+    # Process each menu item
+    for item in items_list:
+        name = item['name'].lower()
+        category = item['category'].lower() if item['category'] else ''
+        
+        # DEFINITIVE RULES FOR NON-ALCOHOLIC BEVERAGES
+        if ('pepsi' in name or 
+            'coca' in name or 
+            'sprite' in name or 
+            'fanta' in name or 
+            'juice' in name or 
+            'soda' in name or 
+            'water' in name or 
+            'tea' in name or 
+            'coffee' in name or 
+            'น้ำ' in name or  # Thai for water/drink
+            'fizz' in name or 
+            'mocktail' in name or 
+            'peony' in name or 
+            'blue asian' in name or 
+            'tropical summer' in name or 
+            'yu-ney' in name or 
+            'freshy island' in name or 
+            'chrysanthemum' in name or 
+            'grass jelly' in name):
+            
+            # EXCLUSIONS: Food items with drink words
+            if ('soup' in name or 'dessert' in category.lower() or 
+                'ginkgo' in name or 'bua loi' in name or 'rice' in name):
+                other_items.append(item)
             else:
-                 # Should not happen with valid indices, but handle gracefully
-                 logging.warning(f"Could not determine boundary price for category {chr(65 + i)}")
-                 # Use the previous boundary or min price as fallback
-                 category_boundaries.append(category_boundaries[-1] if category_boundaries else min_price)
-
-        # Ensure boundaries are unique and sorted descending
-        category_boundaries = sorted(list(set(category_boundaries)), reverse=True)
-
-        # Add the minimum price as the effective floor for the last category
-        category_boundaries.append(min_price - 0.01) # Ensure min_price items are included
-
-        boundary_strs = [f">${b:.2f}" for b in category_boundaries[:-1]] # Don't print the floor boundary
-        logging.info(f"Adaptive category price boundaries (Min price for Cat A, B, C...): {boundary_strs}")
-
-        # Assign items to categories based on these boundaries
-        for item_dict in sorted_items_list:
-            item_price = item_dict['price']
-            assigned = False
-            # Find the first boundary the price is >= to
-            for i, boundary in enumerate(category_boundaries[:-1]): # Iterate through A, B, C... boundaries
-                 if item_price >= boundary:
-                     category_letter = chr(65 + i)
-                     categories[category_letter].append(item_dict)
-                     assigned = True
-                     break
-            # If not assigned (should only happen for min_price items falling below last explicit boundary)
-            if not assigned:
-                 # Assign to the last category
-                 category_letter = chr(65 + num_categories - 1)
-                 categories[category_letter].append(item_dict)
-
-    else:
-        # --- Standard Equal Price Range Division ---
-        logging.info("Using standard categorization (equal price range division).")
-        # Avoid division by zero if num_categories is 0 or less (handled earlier, but safety)
-        if num_categories <= 0: num_categories = 1
-        category_range_size = price_range / num_categories
-
-        # Print calculated category ranges
-        logging.info(f"Calculated category range size: ${category_range_size:.2f}")
-        for i in range(num_categories):
-             cat_letter = chr(65 + i)
-             cat_max = max_price - (i * category_range_size)
-             cat_min = max_price - ((i + 1) * category_range_size)
-             # Ensure the last category includes the minimum price exactly
-             if i == num_categories - 1: cat_min = min_price
-             logging.info(f"  Target range for Category {cat_letter}: ~${cat_min:.2f} - ${cat_max:.2f}")
-
-
-        for item_dict in sorted_items_list:
-            item_price = item_dict['price']
-            # Determine category index based on price position within the total range
-            # Handle max_price edge case: should be in Category A (index 0)
-            if item_price == max_price:
-                category_index = 0
-            # Avoid division by zero if category_range_size is 0 (handled earlier, but safety)
-            elif category_range_size > 0:
-                 # Calculate how many 'ranges' down from the max price this item is
-                 category_index = int((max_price - item_price) / category_range_size)
-                 # Clamp index to valid range [0, num_categories - 1]
-                 category_index = max(0, min(num_categories - 1, category_index))
-            else: # category_range_size is 0 (all prices same) -> should be handled by initial check
-                 category_index = 0
-
-            category_letter = chr(65 + category_index)
-            categories[category_letter].append(item_dict)
-
-    # Log the distribution of items across final categories
-    logging.info("\n--- Final Item Distribution by Price Category ---")
+                # Ensure correct category
+                item['category'] = 'Non-Alcoholic Beverage'
+                non_alcoholic_beverages.append(item)
+            continue
+            
+        # SPECIAL CASE: Santa Vittoria
+        if 'santa vittoria' in name or 'ซานตา วิตตอเรีย' in name:
+            # Santa Vittoria is mineral water (non-alcoholic), whether sparkling or still
+            item['category'] = 'Non-Alcoholic Beverage'
+            non_alcoholic_beverages.append(item)
+            continue
+            
+        # DEFINITIVE RULES FOR ALCOHOLIC BEVERAGES
+        if ('beer' in name or 
+            'เบียร์' in name or 
+            'singha' in name or 
+            'tsingtao' in name or 
+            'สิงห์' in name or 
+            'ชิงเต่า' in name or 
+            'wine' in name or 
+            'whisky' in name or 
+            'whiskey' in name or 
+            'vodka' in name or 
+            'gin' in name or 
+            'rum' in name or 
+            'tequila' in name or 
+            'dimple' in name):
+                
+            # Ensure correct category
+            item['category'] = 'Alcoholic Beverage'
+            alcoholic_beverages.append(item)
+            continue
+            
+        # Use category information as fallback
+        if 'beverage' in category:
+            if 'alcoholic' in category:
+                alcoholic_beverages.append(item)
+            else:
+                non_alcoholic_beverages.append(item)
+        else:
+            # Not a beverage or not clearly identified
+            other_items.append(item)
+    
+    # Create result categories dict
+    categories = {}
+    
+    # Assign alcoholic beverages to category Z
+    if alcoholic_beverages:
+        categories['Z'] = sorted(alcoholic_beverages, key=lambda x: x['price'], reverse=True)
+        
+    # Assign non-alcoholic beverages to category Y
+    if non_alcoholic_beverages:
+        categories['Y'] = sorted(non_alcoholic_beverages, key=lambda x: x['price'], reverse=True)
+    
+    # Apply dynamic price categorization to non-beverage items
+    if other_items:
+        # Sort by price (descending)
+        sorted_items = sorted(other_items, key=lambda x: x['price'], reverse=True)
+        
+        # Setup thresholds
+        expensive_threshold_ratio = 1.3  # 30% difference
+        inexpensive_threshold_ratio = 2.0  # 2x difference
+        
+        # Price below which we switch threshold
+        switch_threshold = sorted_items[0]['price'] / 2 if sorted_items else 0
+        
+        # Keep track of remaining items to categorize
+        remaining_items = sorted_items.copy()
+        current_category = 0  # Start with category A (0)
+        
+        while remaining_items:
+            current_category_letter = chr(65 + current_category)  # A, B, C, ...
+            category_items = []
+            
+            # Add the first item to the current category
+            first_item = remaining_items.pop(0)
+            category_items.append(first_item)
+            highest_price = lowest_price = first_item['price']
+            
+            # Determine which threshold to use
+            threshold_ratio = expensive_threshold_ratio if highest_price >= switch_threshold else inexpensive_threshold_ratio
+            
+            # Add more items within threshold
+            while remaining_items:
+                next_item = remaining_items[0]
+                next_price = next_item['price']
+                
+                # Prevent division by zero
+                if next_price <= 0:
+                    logging.warning(f"Item '{next_item['name']}' has invalid price ${next_price:.2f}. Moving to next item.")
+                    remaining_items.pop(0)  # Remove this item and continue
+                    continue
+                
+                if highest_price / next_price > threshold_ratio:
+                    break
+                
+                category_items.append(remaining_items.pop(0))
+                lowest_price = next_price
+            
+            # Store the category
+            categories[current_category_letter] = category_items
+            
+            # Prepare for next category
+            current_category += 1
+            
+            # Adjust threshold if needed
+            if remaining_items and remaining_items[0]['price'] < switch_threshold:
+                threshold_ratio = inexpensive_threshold_ratio
+    
+    # Log the categorization results
+    logging.info("\n--- Final Categorization Results ---")
     for category_letter, items in sorted(categories.items()):
-        category_min_price = min(item['price'] for item in items) if items else 0
-        category_max_price = max(item['price'] for item in items) if items else 0
-        logging.info(f"Category {category_letter}: {len(items)} items. Actual price range: ${category_min_price:.2f} - ${category_max_price:.2f}")
-
-    return dict(categories) # Convert back to regular dict
+        if not items:
+            continue  # Skip empty categories
+            
+        category_type = "Alcoholic Beverages" if category_letter == 'Z' else \
+                       "Non-Alcoholic Beverages" if category_letter == 'Y' else \
+                       f"Price Category"
+        price_range = f"${min(item['price'] for item in items):.2f} - ${max(item['price'] for item in items):.2f}" if items else "N/A"
+        logging.info(f"Category {category_letter} ({category_type}): {len(items)} items. Price range: {price_range}")
+        for item in items:
+            logging.info(f"  ${item['price']:.2f} - {item['name']}")
+    
+    return categories
 
 def process_menu_images(api_key, image_folder, num_price_categories=3):
     """
     Process all menu images in a folder, extract items (name, price, category),
     and categorize them by price tiers (A, B, C...).
 
-    :param api_key: Your Anthropic API key
+    :param api_key: Your Gemini API key
     :param image_folder: Path to folder containing menu images
     :param num_price_categories: Number of price categories (A, B, C...)
     :return: Price-categorized menu items dict, and overall confidence scores dict
@@ -476,31 +528,67 @@ def process_menu_images(api_key, image_folder, num_price_categories=3):
     all_confidence_scores_combined = {}
     image_extraction_counts = []
 
-    # --- Updated Prompt for Claude ---
+    # --- Updated Prompt for Gemini ---
     prompt_text = f"""
     Please extract all menu items from the provided image(s).
-    For each distinct menu item found, provide the following information on a single line:
-    1. The complete Item Name.
-    2. The exact Price (including currency symbol like $ or € if visible, otherwise just the number).
-    3. The item's Category (e.g., Appetizer, Main Course, Dessert, Beverage, Side Dish).
 
-    Format each item STRICTLY as:
-    Item Name $Price Category
+For each distinct menu item found, provide the following information on a single line:
+1. The complete Item Name in English (if available).
+2. The Thai name of the item (if available).
+3. If only Thai OR only English name is available, just extract what is present and mark the other blank
+4. The exact Price (including currency symbol like $ or ฿ if visible, otherwise just the number).
+5. The item's Category (e.g., Appetizer, Main Course, Dessert, Beverage, Side Dish).
 
-    Examples:
-    Classic Caesar Salad $12.99 Appetizer
-    Grilled Salmon Fillet $24.50 Main Course
-    New York Cheesecake $8.00 Dessert
-    Iced Tea $3.50 Beverage
-    French Fries $5.00 Side Dish
+Format each item STRICTLY as:
+English Item Name Thai Item Name $Price Category
 
-    IMPORTANT INSTRUCTIONS:
-    - List EVERY visible menu item, even if unsure about details.
-    - If you cannot clearly determine the Item Name, Price, or Category, use the placeholder "(unclear)" for that specific part. For example: "House Special (unclear) $16.99 Main Course" or "Spicy Tuna Roll $15.00 (unclear)". If the category is totally unknown, use "Uncategorized".
-    - Ensure the price is extracted accurately.
-    - Do NOT add any introductory text, explanations, summaries, or formatting like bullet points or markdown. Only output the list of items in the specified format, one item per line.
-    - If an item seems to span multiple lines in the menu, combine it into a single logical item name if possible.
-    - Pay attention to sections or headers in the menu image to help determine the category.
+Examples (menu item is available in both english and thai):
+Classic Caesar Salad ซีซาร์สลัดคลาสสิค $12.99 Appetizer
+Grilled Salmon Fillet ปลาแซลมอนย่าง $24.50 Main Course
+New York Cheesecake นิวยอร์กชีสเค้ก $8.00 Dessert
+Iced Tea ชาเย็น $3.50 Beverage
+French Fries เฟรนช์ฟรายส์ $5.00 Side Dish
+
+Examples (menu item is only available in english):
+Pad Thai $12.99 Main Course
+Classic Caesar Salad $12.99 Appetizer
+Grilled Salmon Fillet $24.50 Main Course
+New York Cheesecake $8.00 Dessert
+Iced Tea $3.50 Beverage
+French Fries $5.00 Side Dish
+
+Examples (menu item is only available in thai):
+ผัดไทย $12.99 Main Course
+ซีซาร์สลัดคลาสสิค $12.99 Appetizer
+ปลาแซลมอนย่าง $24.50 Main Course
+นิวยอร์กชีสเค้ก $8.00 Dessert
+ชาเย็น $3.50 Beverage
+เฟรนช์ฟรายส์ $5.00 Side Dish
+
+IMPORTANT INSTRUCTIONS:
+- List EVERY visible menu item, and do not include the menu item details.
+- If you cannot clearly determine any part (Price or Category), use the placeholder "(unclear)" for that specific part.
+- If the category is totally unknown, use "Uncategorized".
+- Ensure the price is extracted accurately.
+- Do NOT add any introductory text, explanations, summaries, or formatting like bullet points or markdown.
+- Only output the list of items in the specified format, one item per line.
+- If an item seems to span multiple lines in the menu image, combine it into a single logical item name if possible.
+- Pay attention to sections or headers in the menu image to help determine the category.
+
+CRITICAL BEVERAGE CATEGORIZATION INSTRUCTIONS:
+- You MUST correctly identify ALL beverages and categorize them properly:
+  * ALL beers (Singha, Tsingtao, Chang, etc.) MUST be labeled as "Alcoholic Beverage"
+  * ALL wines, spirits, whiskeys, cocktails MUST be labeled as "Alcoholic Beverage"
+  * ALL sodas, juices, teas, coffees, mocktails MUST be labeled as "Non-Alcoholic Beverage"
+  * Santa Vittoria Sparkling is alcoholic, regular Santa Vittoria is non-alcoholic water
+
+EXAMPLES OF CORRECT BEVERAGE CATEGORIZATION:
+Tsingtao Beer 青岛啤酒 $130.00 Alcoholic Beverage
+Singha Beer สิงห์เบียร์ $110.00 Alcoholic Beverage
+Pepsi $30.00 Non-Alcoholic Beverage
+Orange Juice $80.00 Non-Alcoholic Beverage
+Coffee ชาเย็น $75.00 Non-Alcoholic Beverage
+Wine ไวน์ $220.00 Alcoholic Beverage
     """
 
     # Process images (can be done one-by-one or batched if API/model supports it well)
@@ -570,29 +658,15 @@ def process_menu_images(api_key, image_folder, num_price_categories=3):
     else:
          logging.info("No confidence scores available.")
 
-
     if not all_menu_items_combined:
         logging.error("No menu items were successfully extracted from any images.")
         return {}, {}
 
-    # --- Dynamic Adjustment of Price Categories ---
-    # Adjust num_categories based on item count for better distribution
-    min_items_per_category = 3 # Aim for at least 3 items per category if possible
-    max_possible_categories = len(all_menu_items_combined) // min_items_per_category
-    adjusted_categories = max(1, min(num_price_categories, max_possible_categories))
-
-    if adjusted_categories != num_price_categories:
-        logging.warning(f"Adjusting number of price categories from {num_price_categories} to {adjusted_categories} "
-                      f"based on item count ({len(all_menu_items_combined)}) and target minimum items per category ({min_items_per_category}).")
-        num_price_categories = adjusted_categories
-    else:
-         logging.info(f"Using requested number of price categories: {num_price_categories}")
-
-    # Categorize the combined menu items by price tiers (A, B, C...)
+    # Categorize the combined menu items by price tiers
     logging.info("\n--- Categorizing All Extracted Items by Price ---")
-    final_price_categories = categorize_menu_items(all_menu_items_combined, num_price_categories)
+    final_categories = categorize_menu_items_with_beverage_priority(all_menu_items_combined)
 
-    return final_price_categories, all_confidence_scores_combined
+    return final_categories, all_confidence_scores_combined
 
 ### FOR BUNDLE GENERATION ###
 def generate(restaurant_name, average_spend):
@@ -635,7 +709,7 @@ def generate(restaurant_name, average_spend):
 
     try:
         # Read the file content
-        with open(categorized_file_loc, "r") as file:
+        with open(categorized_file_loc, "r", encoding="utf-8") as file:
             menu_content = file.read()
     except Exception as e:
         print(f"Error reading menu file: {e}")
@@ -1663,7 +1737,7 @@ def process_menu():
             return jsonify({"error": "Restaurant name is required"}), 400
 
         # Get API key from headers
-        api_key = request.headers.get('X-API-Key', claude_api_key)
+        api_key = request.headers.get('X-API-Key', gemini_api_key)
 
         # Construct path to uploaded images
         restaurant_folder = os.path.join(app.config['UPLOAD_FOLDER'], secure_filename(restaurant_name))
