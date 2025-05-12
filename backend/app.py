@@ -1616,7 +1616,7 @@ def create_hungry_hub_proposal(json_file='./menu_bundles.json', menu_file='./cat
     logging.info(f"Found {len(all_categories)} unique categories in menu bundles: {all_categories}")
 
     # Parse menu items with our improved function
-    menu_items_data = parse_menu_items(menu_file)
+    menu_items_data = parse_menu_items_for_excel(menu_file)  # Changed from parse_menu_items to parse_menu_items_for_excel
 
     # Step 3: Create Workbook and 'HH Proposal' Sheet
     workbook = openpyxl.Workbook()
