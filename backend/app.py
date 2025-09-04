@@ -21,9 +21,9 @@ from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 
 # API keys
-from anthropic import Anthropic
-from google import genai
-from google.genai import types
+import google.generativeai as genai
+from google.generativeai import types
+from google.generativeai.types import GenerationConfig
 
 # Load environment variables from .env file
 load_dotenv()
@@ -75,91 +75,93 @@ def encode_image(image_path):
 
 def extract_text_from_image(api_key, image_paths, prompt_text):
     """
-    Use Claude to extract text from multiple images.
+    Use Gemini to extract text from multiple images.
 
-    :param api_key: Your Anthropic API key
+    :param api_key: Your Google API key
     :param image_paths: List of paths to image files
-    :param prompt_text: Text prompt for Claude
+    :param prompt_text: Text prompt for Gemini
     :return: Extracted text from the images
     """
-    # Initialize the Anthropic client
-    client = Anthropic(api_key=api_key)
+    # Configure the Gemini API
+    try:
+        genai.configure(api_key=api_key)
+    except Exception as e:
+        logging.error(f"Error configuring Gemini API: {e}")
+        return None
 
     try:
-        # Create content array
-        content = []
+        # Initialize the Gemini model
+        model = genai.GenerativeModel('gemini-1.5-pro-latest')
 
-        # Add each image to the content array
+        # Prepare parts for the request
+        parts = []
         image_added = False
+        
+        # Process each image
         for image_path in image_paths:
-            # Determine media type based on file extension
-            media_type = "image/jpeg"  # Default
-            if image_path.lower().endswith(".png"):
-                media_type = "image/png"
-            elif image_path.lower().endswith(".gif"):
-                media_type = "image/gif"
-            elif image_path.lower().endswith(".webp"):
-                 media_type = "image/webp" # Add webp support
-
-
-            # Encode the image
-            logging.info(f"Encoding image: {os.path.basename(image_path)}")
-            base64_image = encode_image(image_path)
-
-            if base64_image:
-                # Add image to content array
-                content.append({
-                    "type": "image",
-                    "source": {
-                        "type": "base64",
-                        "media_type": media_type,
-                        "data": base64_image
+            try:
+                # Read the image file directly
+                with open(image_path, "rb") as image_file:
+                    image_data = image_file.read()
+                
+                # Determine mime type based on file extension
+                ext = os.path.splitext(image_path)[1][1:].lower()
+                mime_type = "image/jpeg"  # Default
+                if ext == "png":
+                    mime_type = "image/png"
+                elif ext == "gif":
+                    mime_type = "image/gif"
+                elif ext == "webp":
+                    mime_type = "image/webp"
+                
+                # Add image to parts
+                parts.append({
+                    "inline_data": {
+                        "mime_type": mime_type,
+                        "data": base64.b64encode(image_data).decode('utf-8')
                     }
                 })
                 image_added = True
-            else:
-                logging.warning(f"Skipping image due to encoding error: {os.path.basename(image_path)}")
-
+                logging.info(f"Added image: {os.path.basename(image_path)}")
+            except Exception as e:
+                logging.warning(f"Error processing image {image_path}: {e}")
+        
         if not image_added:
-            logging.error("No images could be successfully encoded and added.")
+            logging.error("No images could be successfully processed.")
             return None
+        
+        # Add the text prompt
+        parts.append({"text": prompt_text})
 
-        # Add text prompt at the end
-        content.append({
-            "type": "text",
-            "text": prompt_text
-        })
-
-        # Send request to Claude
-        logging.info("Sending request to Claude API...")
-        response = client.messages.create(
-            model="claude-3-haiku-20240307", # Using Haiku for speed/cost balance
-            # model="claude-3-opus-20240229", # Opus might give better results but is slower/more expensive
-            max_tokens=4000, # Increased max_tokens slightly
-            messages=[
-                {
-                    "role": "user",
-                    "content": content
-                }
-            ]
+        # Send request to Gemini
+        logging.info("Sending request to Gemini API...")
+        response = model.generate_content(
+            parts,
+            generation_config=genai.types.GenerationConfig(
+                max_output_tokens=4000,
+                temperature=0.2,
+                top_p=0.8,
+            )
         )
 
-        # Return the extracted text
-        extracted_text = response.content[0].text
-        logging.info(f"Received response from Claude. Content length: {len(extracted_text)} characters.")
-        # Log first few lines of response for debugging
-        # logging.debug("Claude Response Head:\n" + "\n".join(extracted_text.split('\n')[:5]))
-        return extracted_text
+        # Extract and return the text response
+        if response and hasattr(response, 'text'):
+            extracted_text = response.text
+            logging.info(f"Received response from Gemini. Content length: {len(extracted_text)} characters.")
+            return extracted_text
+        else:
+            logging.error("Received empty or unexpected response format from Gemini.")
+            return None
 
     except Exception as e:
-        logging.error(f"An error occurred during Claude API call: {e}", exc_info=True) # Log traceback
+        logging.error(f"An error occurred during Gemini API call: {e}", exc_info=True)
         return None
 
 def parse_menu_items(extracted_text):
     """
     Parse menu items, prices, and categories from extracted text.
 
-    :param extracted_text: Text extracted from the image by Claude
+    :param extracted_text: Text extracted from the image by Gemini
     :return: Dictionary of menu items {name: {'price': float, 'category': str}}, plus confidence scores {name: float}
     """
     menu_items = {}
@@ -177,23 +179,16 @@ def parse_menu_items(extracted_text):
     unclear_items = 0
     default_category_items = 0
 
-    logging.info(f"Parsing {total_non_empty_lines} non-empty lines from Claude output.")
+    logging.info(f"Parsing {total_non_empty_lines} non-empty lines from Gemini output.")
 
     # --- Refined Regex Patterns ---
     # Price pattern: Handles various currency symbols (optional), commas, and decimals
     # Makes currency symbol and spacing optional. Allows integer prices.
     price_pattern = r'(?:[$€£¥]\s*|\b)(\d+(?:,\d{3})*(?:\.\d{1,2})?)\b'
-    # Regex to find item name, price, and category (assumes format: NAME PRICE CATEGORY)
-    # It tries to be flexible with spacing and potential currency symbols.
-    # Group 1: Item Name (non-greedy)
-    # Group 2: Price (using price_pattern logic)
-    # Group 3: Category (rest of the line)
-    # This regex is complex and might need tuning based on Claude's actual output format.
-    # Let's try a simpler approach first: find price, then split.
 
     for line_num, line in enumerate(lines):
         line = line.strip()
-        # Skip empty lines or potential headers/footers from Claude
+        # Skip empty lines or potential headers/footers from Gemini
         if not line or line.startswith("Here are the items") or line.startswith("---"):
             continue
 
@@ -206,7 +201,6 @@ def parse_menu_items(extracted_text):
             if phrase in line.lower():
                 line_confidence *= 0.6  # Reduce confidence if uncertainty is indicated globally
                 is_unclear = True
-                # break # Found one, no need to check others for this line
 
         # 1. Find the price first (more reliable anchor)
         price_match = re.search(price_pattern, line)
@@ -242,14 +236,13 @@ def parse_menu_items(extracted_text):
                 line_confidence *= 0.8 # Slightly reduce confidence if category was unclear/missing
                 default_category_items += 1
 
-            # Remove any "(unclear)" tags added by Claude from name/category
+            # Remove any "(unclear)" tags added by Gemini from name/category
             item_name = item_name.replace("(unclear)", "").strip()
             category_name = category_name.replace("(unclear)", "").strip()
 
             # If the global 'unclear' flag was set, mark item count
             if is_unclear:
                 unclear_items += 1
-
 
             # Check name/category quality (very short strings might be noise)
             if len(item_name) < 3:
@@ -297,150 +290,209 @@ def parse_menu_items(extracted_text):
     # Log the extraction metrics
     logging.info(f"Parsing complete. Successfully extracted {successful_extractions} items.")
     logging.info(f"Extraction rate: {extraction_rate:.1%} of non-empty lines.")
-    logging.info(f"Items marked unclear by Claude or parser: {unclear_items}")
+    logging.info(f"Items marked unclear by Gemini or parser: {unclear_items}")
     logging.info(f"Items assigned default 'Uncategorized' category: {default_category_items}")
     logging.info(f"Average confidence score for extracted items: {avg_confidence:.1%}")
 
     return menu_items, confidence_scores
 
-def categorize_menu_items(menu_items, num_categories=3):
+def categorize_menu_items_with_beverage_priority(menu_items):
     """
-    Categorize menu items based on their price into groups like A, B, C.
-
+    Categorize menu items with enhanced beverage detection and price validation.
+    
     :param menu_items: Dictionary {name: {'price': float, 'category': str}}
-    :param num_categories: Number of price categories (A, B, C...)
-    :return: Dictionary {price_category: [{'name': str, 'price': float, 'category': str}, ...]}
+    :return: Dictionary {category_letter: [{'name': str, 'price': float, 'category': str}, ...]}
     """
     if not menu_items:
-        logging.warning("No menu items provided for price categorization.")
+        logging.warning("No menu items provided for categorization.")
         return {}
-
-    # Prepare items list: [{'name': name, 'price': price, 'category': category}, ...]
-    items_list = [{'name': name, **data} for name, data in menu_items.items()]
-
-    # Sort items by price (descending)
-    sorted_items_list = sorted(items_list, key=lambda x: x['price'], reverse=True)
-
-    # Determine price ranges
-    prices = [item['price'] for item in sorted_items_list]
-    if not prices: # Should not happen if menu_items is not empty, but safety check
-        return {}
-
-    max_price = max(prices)
-    min_price = min(prices)
-    price_range = max_price - min_price
-
-    logging.info(f"\nPrice range for categorization: ${min_price:.2f} to ${max_price:.2f} (Spread: ${price_range:.2f})")
-
-    # Create categories based on price ranges
-    # Result structure: {'A': [item_dict1, item_dict2], 'B': [...]}
-    categories = defaultdict(list)
-
-    # Handle edge cases: zero range or only one category requested
-    if num_categories <= 1 or price_range == 0:
-        logging.info("Assigning all items to Category A (single category requested or zero price range).")
-        categories['A'].extend(sorted_items_list)
-        return dict(categories) # Convert back to dict from defaultdict
-
-    # --- Adaptive Categorization Logic (from original code) ---
-    # Decide whether to use equal price range division or percentile-based division
-    large_range_threshold = 3.0 # Use adaptive if range > 3x min price
-    use_adaptive = price_range > min_price * large_range_threshold and min_price > 0
-
-    if use_adaptive:
-        logging.info(f"Large price range detected (range/min > {large_range_threshold:.1f}) - using adaptive (percentile-based) categorization.")
-
-        num_items = len(sorted_items_list)
-        category_boundaries = [] # List of lower bounds for categories B, C, D...
-
-        # Calculate boundary prices based on item count percentiles
-        for i in range(1, num_categories):
-            idx = int((i * num_items) / num_categories)
-            # Use the price of the item at the boundary index as the threshold
-            # Ensure index is valid
-            if 0 <= idx < num_items:
-                 # The boundary is the price *below which* items fall into the next category
-                 # So, category A is >= boundary[0], B is < boundary[0] and >= boundary[1], etc.
-                 boundary_price = sorted_items_list[idx]['price']
-                 # Add a small epsilon if needed to handle exact matches at boundaries consistently
-                 # Let's adjust logic: boundary price IS the lower limit for the higher category
-                 category_boundaries.append(boundary_price)
+    
+    # First, clean up any obviously wrong prices
+    cleaned_menu_items = {}
+    for name, item_data in menu_items.items():
+        price = item_data['price']
+        
+        # Fix zero or negative prices (invalid data)
+        if price <= 0:
+            logging.warning(f"Found invalid price for {name}: ${price:.2f}, setting to minimum price of $1.00")
+            item_data['price'] = 1.0  # Set a minimum price to avoid division by zero
+        
+        # Check for unreasonable prices (over 500 baht for a menu item)
+        elif price > 500:
+            logging.warning(f"Found potentially incorrect price for {name}: ${price:.2f}")
+            
+            # Extract price from item name if possible
+            price_match = re.search(r'฿(\d+)', name)
+            if price_match:
+                corrected_price = float(price_match.group(1))
+                logging.info(f"Corrected price from name for {name}: ${corrected_price:.2f}")
+                item_data['price'] = corrected_price
+        
+        cleaned_menu_items[name] = item_data
+    
+    # Prepare items list
+    items_list = [{'name': name, **data} for name, data in cleaned_menu_items.items()]
+    
+    # Initialize categories
+    alcoholic_beverages = []
+    non_alcoholic_beverages = []
+    other_items = []
+    
+    # Process each menu item
+    for item in items_list:
+        name = item['name'].lower()
+        category = item['category'].lower() if item['category'] else ''
+        
+        # DEFINITIVE RULES FOR NON-ALCOHOLIC BEVERAGES
+        if ('pepsi' in name or 
+            'coca' in name or 
+            'sprite' in name or 
+            'fanta' in name or 
+            'juice' in name or 
+            'soda' in name or 
+            'water' in name or 
+            'tea' in name or 
+            'coffee' in name or 
+            'น้ำ' in name or  # Thai for water/drink
+            'fizz' in name or 
+            'mocktail' in name or 
+            'peony' in name or 
+            'blue asian' in name or 
+            'tropical summer' in name or 
+            'yu-ney' in name or 
+            'freshy island' in name or 
+            'chrysanthemum' in name or 
+            'grass jelly' in name):
+            
+            # EXCLUSIONS: Food items with drink words
+            if ('soup' in name or 'dessert' in category.lower() or 
+                'ginkgo' in name or 'bua loi' in name or 'rice' in name):
+                other_items.append(item)
             else:
-                 # Should not happen with valid indices, but handle gracefully
-                 logging.warning(f"Could not determine boundary price for category {chr(65 + i)}")
-                 # Use the previous boundary or min price as fallback
-                 category_boundaries.append(category_boundaries[-1] if category_boundaries else min_price)
-
-        # Ensure boundaries are unique and sorted descending
-        category_boundaries = sorted(list(set(category_boundaries)), reverse=True)
-
-        # Add the minimum price as the effective floor for the last category
-        category_boundaries.append(min_price - 0.01) # Ensure min_price items are included
-
-        boundary_strs = [f">${b:.2f}" for b in category_boundaries[:-1]] # Don't print the floor boundary
-        logging.info(f"Adaptive category price boundaries (Min price for Cat A, B, C...): {boundary_strs}")
-
-        # Assign items to categories based on these boundaries
-        for item_dict in sorted_items_list:
-            item_price = item_dict['price']
-            assigned = False
-            # Find the first boundary the price is >= to
-            for i, boundary in enumerate(category_boundaries[:-1]): # Iterate through A, B, C... boundaries
-                 if item_price >= boundary:
-                     category_letter = chr(65 + i)
-                     categories[category_letter].append(item_dict)
-                     assigned = True
-                     break
-            # If not assigned (should only happen for min_price items falling below last explicit boundary)
-            if not assigned:
-                 # Assign to the last category
-                 category_letter = chr(65 + num_categories - 1)
-                 categories[category_letter].append(item_dict)
-
-    else:
-        # --- Standard Equal Price Range Division ---
-        logging.info("Using standard categorization (equal price range division).")
-        # Avoid division by zero if num_categories is 0 or less (handled earlier, but safety)
-        if num_categories <= 0: num_categories = 1
-        category_range_size = price_range / num_categories
-
-        # Print calculated category ranges
-        logging.info(f"Calculated category range size: ${category_range_size:.2f}")
-        for i in range(num_categories):
-             cat_letter = chr(65 + i)
-             cat_max = max_price - (i * category_range_size)
-             cat_min = max_price - ((i + 1) * category_range_size)
-             # Ensure the last category includes the minimum price exactly
-             if i == num_categories - 1: cat_min = min_price
-             logging.info(f"  Target range for Category {cat_letter}: ~${cat_min:.2f} - ${cat_max:.2f}")
-
-
-        for item_dict in sorted_items_list:
-            item_price = item_dict['price']
-            # Determine category index based on price position within the total range
-            # Handle max_price edge case: should be in Category A (index 0)
-            if item_price == max_price:
-                category_index = 0
-            # Avoid division by zero if category_range_size is 0 (handled earlier, but safety)
-            elif category_range_size > 0:
-                 # Calculate how many 'ranges' down from the max price this item is
-                 category_index = int((max_price - item_price) / category_range_size)
-                 # Clamp index to valid range [0, num_categories - 1]
-                 category_index = max(0, min(num_categories - 1, category_index))
-            else: # category_range_size is 0 (all prices same) -> should be handled by initial check
-                 category_index = 0
-
-            category_letter = chr(65 + category_index)
-            categories[category_letter].append(item_dict)
-
-    # Log the distribution of items across final categories
-    logging.info("\n--- Final Item Distribution by Price Category ---")
+                # Ensure correct category
+                item['category'] = 'Non-Alcoholic Beverage'
+                non_alcoholic_beverages.append(item)
+            continue
+            
+        # SPECIAL CASE: Santa Vittoria
+        if 'santa vittoria' in name or 'ซานตา วิตตอเรีย' in name:
+            # Santa Vittoria is mineral water (non-alcoholic), whether sparkling or still
+            item['category'] = 'Non-Alcoholic Beverage'
+            non_alcoholic_beverages.append(item)
+            continue
+            
+        # DEFINITIVE RULES FOR ALCOHOLIC BEVERAGES
+        if ('beer' in name or 
+            'เบียร์' in name or 
+            'singha' in name or 
+            'tsingtao' in name or 
+            'สิงห์' in name or 
+            'ชิงเต่า' in name or 
+            'wine' in name or 
+            'whisky' in name or 
+            'whiskey' in name or 
+            'vodka' in name or 
+            'gin' in name or 
+            'rum' in name or 
+            'tequila' in name or 
+            'dimple' in name):
+                
+            # Ensure correct category
+            item['category'] = 'Alcoholic Beverage'
+            alcoholic_beverages.append(item)
+            continue
+            
+        # Use category information as fallback
+        if 'beverage' in category:
+            if 'alcoholic' in category:
+                alcoholic_beverages.append(item)
+            else:
+                non_alcoholic_beverages.append(item)
+        else:
+            # Not a beverage or not clearly identified
+            other_items.append(item)
+    
+    # Create result categories dict
+    categories = {}
+    
+    # Assign alcoholic beverages to category Z
+    if alcoholic_beverages:
+        categories['Z'] = sorted(alcoholic_beverages, key=lambda x: x['price'], reverse=True)
+        
+    # Assign non-alcoholic beverages to category Y
+    if non_alcoholic_beverages:
+        categories['Y'] = sorted(non_alcoholic_beverages, key=lambda x: x['price'], reverse=True)
+    
+    # Apply dynamic price categorization to non-beverage items
+    if other_items:
+        # Sort by price (descending)
+        sorted_items = sorted(other_items, key=lambda x: x['price'], reverse=True)
+        
+        # Setup thresholds
+        expensive_threshold_ratio = 1.3  # 30% difference
+        inexpensive_threshold_ratio = 2.0  # 2x difference
+        
+        # Price below which we switch threshold
+        switch_threshold = sorted_items[0]['price'] / 2 if sorted_items else 0
+        
+        # Keep track of remaining items to categorize
+        remaining_items = sorted_items.copy()
+        current_category = 0  # Start with category A (0)
+        
+        while remaining_items:
+            current_category_letter = chr(65 + current_category)  # A, B, C, ...
+            category_items = []
+            
+            # Add the first item to the current category
+            first_item = remaining_items.pop(0)
+            category_items.append(first_item)
+            highest_price = lowest_price = first_item['price']
+            
+            # Determine which threshold to use
+            threshold_ratio = expensive_threshold_ratio if highest_price >= switch_threshold else inexpensive_threshold_ratio
+            
+            # Add more items within threshold
+            while remaining_items:
+                next_item = remaining_items[0]
+                next_price = next_item['price']
+                
+                # Prevent division by zero
+                if next_price <= 0:
+                    logging.warning(f"Item '{next_item['name']}' has invalid price ${next_price:.2f}. Moving to next item.")
+                    remaining_items.pop(0)  # Remove this item and continue
+                    continue
+                
+                if highest_price / next_price > threshold_ratio:
+                    break
+                
+                category_items.append(remaining_items.pop(0))
+                lowest_price = next_price
+            
+            # Store the category
+            categories[current_category_letter] = category_items
+            
+            # Prepare for next category
+            current_category += 1
+            
+            # Adjust threshold if needed
+            if remaining_items and remaining_items[0]['price'] < switch_threshold:
+                threshold_ratio = inexpensive_threshold_ratio
+    
+    # Log the categorization results
+    logging.info("\n--- Final Categorization Results ---")
     for category_letter, items in sorted(categories.items()):
-        category_min_price = min(item['price'] for item in items) if items else 0
-        category_max_price = max(item['price'] for item in items) if items else 0
-        logging.info(f"Category {category_letter}: {len(items)} items. Actual price range: ${category_min_price:.2f} - ${category_max_price:.2f}")
-
-    return dict(categories) # Convert back to regular dict
+        if not items:
+            continue  # Skip empty categories
+            
+        category_type = "Alcoholic Beverages" if category_letter == 'Z' else \
+                       "Non-Alcoholic Beverages" if category_letter == 'Y' else \
+                       f"Price Category"
+        price_range = f"${min(item['price'] for item in items):.2f} - ${max(item['price'] for item in items):.2f}" if items else "N/A"
+        logging.info(f"Category {category_letter} ({category_type}): {len(items)} items. Price range: {price_range}")
+        for item in items:
+            logging.info(f"  ${item['price']:.2f} - {item['name']}")
+    
+    return categories
 
 
 def process_menu_images(api_key, image_folder, num_price_categories=3):
@@ -448,7 +500,7 @@ def process_menu_images(api_key, image_folder, num_price_categories=3):
     Process all menu images in a folder, extract items (name, price, category),
     and categorize them by price tiers (A, B, C...).
 
-    :param api_key: Your Anthropic API key
+    :param api_key: Your Gemini API key
     :param image_folder: Path to folder containing menu images
     :param num_price_categories: Number of price categories (A, B, C...)
     :return: Price-categorized menu items dict, and overall confidence scores dict
@@ -477,7 +529,7 @@ def process_menu_images(api_key, image_folder, num_price_categories=3):
     all_confidence_scores_combined = {}
     image_extraction_counts = []
 
-    # --- Updated Prompt for Claude ---
+    # --- Updated Prompt for Gemini ---
     prompt_text = f"""
     Please extract all menu items from the provided image(s).
 
@@ -523,6 +575,21 @@ IMPORTANT INSTRUCTIONS:
 - Only output the list of items in the specified format, one item per line.
 - If an item seems to span multiple lines in the menu image, combine it into a single logical item name if possible.
 - Pay attention to sections or headers in the menu image to help determine the category.
+
+CRITICAL BEVERAGE CATEGORIZATION INSTRUCTIONS:
+- You MUST correctly identify ALL beverages and categorize them properly:
+  * ALL beers (Singha, Tsingtao, Chang, etc.) MUST be labeled as "Alcoholic Beverage"
+  * ALL wines, spirits, whiskeys, cocktails MUST be labeled as "Alcoholic Beverage"
+  * ALL sodas, juices, teas, coffees, mocktails MUST be labeled as "Non-Alcoholic Beverage"
+  * Santa Vittoria Sparkling is alcoholic, regular Santa Vittoria is non-alcoholic water
+
+EXAMPLES OF CORRECT BEVERAGE CATEGORIZATION:
+Tsingtao Beer 青岛啤酒 $130.00 Alcoholic Beverage
+Singha Beer สิงห์เบียร์ $110.00 Alcoholic Beverage
+Pepsi $30.00 Non-Alcoholic Beverage
+Orange Juice $80.00 Non-Alcoholic Beverage
+Coffee ชาเย็น $75.00 Non-Alcoholic Beverage
+Wine ไวน์ $220.00 Alcoholic Beverage
     """
 
     # Process images (can be done one-by-one or batched if API/model supports it well)
@@ -592,46 +659,46 @@ IMPORTANT INSTRUCTIONS:
     else:
          logging.info("No confidence scores available.")
 
-
     if not all_menu_items_combined:
         logging.error("No menu items were successfully extracted from any images.")
         return {}, {}
 
-    # --- Dynamic Adjustment of Price Categories ---
-    # Adjust num_categories based on item count for better distribution
-    min_items_per_category = 3 # Aim for at least 3 items per category if possible
-    max_possible_categories = len(all_menu_items_combined) // min_items_per_category
-    adjusted_categories = max(1, min(num_price_categories, max_possible_categories))
-
-    if adjusted_categories != num_price_categories:
-        logging.warning(f"Adjusting number of price categories from {num_price_categories} to {adjusted_categories} "
-                      f"based on item count ({len(all_menu_items_combined)}) and target minimum items per category ({min_items_per_category}).")
-        num_price_categories = adjusted_categories
-    else:
-         logging.info(f"Using requested number of price categories: {num_price_categories}")
-
-    # Categorize the combined menu items by price tiers (A, B, C...)
+    # Categorize the combined menu items by price tiers
     logging.info("\n--- Categorizing All Extracted Items by Price ---")
-    final_price_categories = categorize_menu_items(all_menu_items_combined, num_price_categories)
+    final_categories = categorize_menu_items_with_beverage_priority(all_menu_items_combined)
 
-    return final_price_categories, all_confidence_scores_combined
+    return final_categories, all_confidence_scores_combined
 
 ### FOR BUNDLE GENERATION ###
-def generate():
+def generate(restaurant_name, average_spend):
+    # Configure the API key once
     try:
-        # Get restaurant name from request
-        restaurant_name = request.json.get('restaurantName')
-        num_categories = request.json.get('numCategories', 4)  # Default to 4
-        if not restaurant_name:
-            return jsonify({"error": "Restaurant name is required"}), 400
-
-        client = genai.Client(
-            api_key=gemini_api_key,
-        )
+        api_key = os.getenv("GEMINI_API_KEY")
+        if not api_key:
+            raise ValueError("GEMINI_API_KEY not found in environment variables.")
+        genai.configure(api_key=api_key)
+    except AttributeError as e:
+        print(f"AttributeError during genai.configure: {e}")
+        print("This strongly suggests an issue with the 'google-generativeai' library installation or version.")
+        print("Please ensure you have the latest version installed (pip install --upgrade google-generativeai) and restart your kernel.")
+        exit()
     except Exception as e:
-        print(f"Error initializing Gemini client: {e}")
-        return
-    
+        print(f"Error configuring Gemini API: {e}")
+        exit()
+    while True:
+        try:
+            average_spend_per_diner = float(average_spend)
+            if average_spend_per_diner <= 0:
+                print("Average spend must be a positive number. Please try again.")
+                continue
+            break
+        except ValueError:
+            print("Invalid input. Please enter a numeric value for average spend.")
+            continue
+        except Exception as e:
+            print(f"An unexpected error occurred while getting input: {e}")
+            return
+
     # Check if categorized_menu_items.txt exists
     categorized_file_loc = os.path.join(
         app.config['UPLOAD_FOLDER'],
@@ -639,158 +706,239 @@ def generate():
         f"categorized_menu_items_{secure_filename(restaurant_name)}.txt"
     )
     if not os.path.exists(categorized_file_loc):
-        print("Error: categorized_menu_items.txt file not found")
-        return
-        
+        print(f"Error: {categorized_file_loc} file not found")
+
     try:
         # Read the file content
-        with open(categorized_file_loc, "r") as file:
+        with open(categorized_file_loc, "r", encoding="utf-8") as file:
             menu_content = file.read()
     except Exception as e:
         print(f"Error reading menu file: {e}")
         return
+        
+    # Detect categories from menu content
+    categories = []
+    try:
+        # This assumes each line in categorized_menu_items.txt has a category label
+        for line in menu_content.split('\n'):
+            if line.strip():
+                # Extract category from the line (assuming format like "Category X: item")
+                parts = line.split(':')
+                if len(parts) > 1:
+                    category = parts[0].strip()
+                    if category.startswith("Category ") and len(category) > 9:
+                        cat_letter = category[9:].strip()
+                        if cat_letter and cat_letter not in categories:
+                            categories.append(cat_letter)
+                            
+        # Also check for section headers like "----- Category X ($xx.xx - $xx.xx) -----"
+        category_pattern = r'----- Category ([A-Z]) \(\$[\d.]+ - \$[\d.]+\) -----'
+        section_matches = re.findall(category_pattern, menu_content)
+        for match in section_matches:
+            if match not in categories:
+                categories.append(match)
+    except Exception as e:
+        print(f"Warning: Error parsing categories: {e}")
+        # Fallback to default categories if parsing fails
+        categories = ["A", "B", "C", "D"]
+
+    # If no categories were found, use default
+    if not categories:
+        print("No categories detected. Using default categories A, B, C, D.")
+        categories = ["A", "B", "C", "D"]
+
+    # Sort categories alphabetically
+    categories.sort()
     
-    # Create prompt with the file content
+    # Check if beverage categories Y and Z exist
+    has_beverages = "Y" in categories or "Z" in categories
+    
+    # Identify main dish categories (typically A and B)
+    main_dish_categories = []
+    if "A" in categories:
+        main_dish_categories.append("A")
+    if "B" in categories:
+        main_dish_categories.append("B")
+    
+    # Identify side dish and appetizer categories (typically C and D)
+    side_categories = []
+    for cat in categories:
+        if cat not in ["Y", "Z"] and cat not in main_dish_categories:
+            side_categories.append(cat)
+            
+    print(f"Detected categories: {categories}")
+    if has_beverages:
+        print("Beverage categories detected. Will apply special portion rules.")
+        
+    category_portions_text = "\n".join([f"Category {cat}: [number of items]" for cat in categories])
+
+    # Update prompt with portion rules
     prompt = f"""
-    Based on these categorised menu data:
-    
-    {menu_content}
-    
-    Please create 4 UNIQUE menu bundles for a varying number of diners (1-6 diners). Each bundle must include some items from each available menu category (A, B, C, and D if present).
-    
-    For each menu bundle, include:
-    1. The number of menu items from each category
-    2. The number of diners the bundle is designed for
-    3. The price per diner
-    4. A suggested discounted bundle price
+Based on these categorised menu data:
+{menu_content}
 
-    Please follow this exact structure for each menu bundle:
-    Suggested_bundle_price:
-    Number_of_diners:
-    category_portions:
-        Category A: [number of items]
-        Category B: [number of items]
-        Category C: [number of items]
-        Category D: [number of items]
-    Original_bundle_price:
-    Discount_percentage:
-    Price_per_diner:
-    
-    Note: Include all four categories (A through D) in your response, even if some categories might have 0 items in certain bundles.
-    """
+The user has indicated an average spend of ${average_spend_per_diner:.2f} per diner.
+Please create 4 UNIQUE menu bundles for a varying number of diners (1-6 diners). Each bundle must include some items from each available menu category ({", ".join(categories)}) where appropriate, following these CRITICAL portion rules:
 
-    model = "gemini-2.5-pro-exp-03-25"
-    contents = [
-        types.Content(
-            role="user",
-            parts=[
-                types.Part.from_text(text=prompt),
-            ],
-        ),
-    ]
-    generate_content_config = types.GenerateContentConfig(
-        response_mime_type="application/json",
-        system_instruction=[
-            types.Part.from_text(text="""You are a menu bundle generator, and your task is to create 4 UNIQUE menu bundles based on a given input of menu categories. 
-Each bundle should be distinctly different from the others. For each bundle:
-            
-1. Include items from all available categories (A, B, C, and D)
+1. For beverage categories (Y and Z):
+   - Each diner should get exactly ONE drink maximum
+   - Total beverages should NEVER exceed the number of diners
+   - Alcoholic beverages (Z) should not exceed the number of diners
+   - Non-alcoholic beverages (Y) should not exceed the number of diners
+
+2. For main dish categories ({", ".join(main_dish_categories)}):
+   - Each diner should get 1-2 main dishes maximum
+   - For 1-2 diners: 1-3 main dishes total
+   - For 3-4 diners: 3-6 main dishes total
+   - For 5-6 diners: 5-9 main dishes total
+
+3. For sides, appetizers, and dessert categories ({", ".join(side_categories)}):
+   - These are shared items
+   - For 1-2 diners: 1-2 items from each category
+   - For 3-4 diners: 2-3 items from each category
+   - For 5-6 diners: 3-4 items from each category
+
+When creating these bundles, try to ensure the "Price_per_diner" (after discount) is around this average spend of ${average_spend_per_diner:.2f}. It should either be less than 15% or more than 15%.
+
+For each menu bundle, include:
+The number of menu items from each category
+The number of diners the bundle is designed for
+The price per diner (should be around ${average_spend_per_diner:.2f})
+A suggested discounted bundle price
+Please follow this exact structure for each menu bundle:
+Suggested_bundle_price:
+Number_of_diners:
+category_portions:
+{category_portions_text}
+Original_bundle_price:
+Discount_percentage:
+Price_per_diner:
+Note: Include all categories in your response, even if some categories might have 0 items in certain bundles.
+"""
+    model_name = "gemini-2.5-pro-exp-03-25"
+    print(f"Using model: {model_name}")
+
+    # Update system instruction with more detailed portion guidelines
+    system_instruction_text = f"""You are a menu bundle generator, and your task is to create 4 UNIQUE menu bundles based on a given input of menu categories and a target average spend per diner.
+
+The user has specified an average spend of ${average_spend_per_diner:.2f} per diner. This is a key factor.
+
+Each bundle should be distinctly different from the others and follow these STRICT portion rules:
+
+1. BEVERAGES (Categories Y and Z):
+   - Each diner gets exactly ONE drink maximum (never more drinks than diners)
+   - Alcoholic beverages (Category Z) should never exceed the number of diners
+   - Non-alcoholic beverages (Category Y) should never exceed the number of diners
+   - Example: For 2 diners, include at MOST 2 drinks total
+
+2. MAIN DISHES (Categories {", ".join(main_dish_categories)}):
+   - Allocate 1-2 main dishes per diner maximum
+   - For 1-2 diners: 1-3 main dishes total
+   - For 3-4 diners: 3-6 main dishes total
+   - For 5-6 diners: 5-9 main dishes total
+
+3. SIDES, APPETIZERS, DESSERTS (Categories {", ".join(side_categories)}):
+   - These are usually shared items
+   - For 1-2 diners: include 1-2 items from each category
+   - For 3-4 diners: include 2-3 items from each category
+   - For 5-6 diners: include 3-4 items from each category
+
+For each bundle:
+1. Include items from all available categories ({", ".join(["Category " + cat for cat in categories])})
 2. Specify exactly how many portions from each category are included
-3. Calculate the original price based on the actual menu prices
-4. Apply a reasonable discount (10-20%)
-5. Calculate the per-person price
-            
-Always include all four categories (A through D) in your response structure, even if some categories have 0 items or don't exist in the input data."""),
-        ],
+3. Calculate the original price based on the actual menu prices from the input data
+4. Apply a reasonable discount (aim for 10-20%)
+5. The "Price_per_diner" after the discount should be as close as possible to the user's specified average spend of ${average_spend_per_diner:.2f}
+
+Always include all categories in your response structure, even if some categories have 0 items or don't exist in the input data."""
+
+    try:
+        gemini_model = genai.GenerativeModel(
+            model_name=model_name,
+            system_instruction=system_instruction_text
+        )
+    except AttributeError as e:
+        print(f"AttributeError during genai.GenerativeModel: {e}")
+        print("This strongly suggests an issue with the 'google-generativeai' library installation or version.")
+        print("Please ensure you have the latest version installed (pip install --upgrade google-generativeai) and restart your kernel.")
+        return
+    except Exception as e:
+        print(f"Error initializing GenerativeModel: {e}")
+        return
+
+    contents = [
+    {
+        "role": "user", 
+        "parts": [{"text": prompt}]
+    }
+    ]
+
+    generation_config_for_method = GenerationConfig(
+        response_mime_type="application/json",
     )
 
-    # Collect the entire response
     complete_response = ""
-    
+    print("\nGenerating menu bundles. This may take a moment...")
     try:
-        # Get the response generator
-        response_stream = client.models.generate_content_stream(
-            model=model,
+        response_stream = gemini_model.generate_content(
             contents=contents,
-            config=generate_content_config,
+            generation_config=generation_config_for_method,
+            stream=True
         )
-        
-        # Check if response is None
+
         if response_stream is None:
-            print("Warning: API returned None for response stream")
-            # Try non-streaming version as fallback
-            try:
-                print("Attempting to use non-streaming API as fallback...")
-                response = client.models.generate_content(
-                    model=model,
-                    contents=contents,
-                    config=generate_content_config,
-                )
-                
-                if response and hasattr(response, 'text'):
-                    complete_response = response.text
-                elif response and hasattr(response, 'parts'):
-                    for part in response.parts:
-                        if hasattr(part, 'text') and part.text is not None:
-                            complete_response += part.text
-                else:
-                    print("Warning: Fallback response format is unexpected")
-            except Exception as fallback_error:
-                print(f"Fallback request also failed: {fallback_error}")
+            print("Warning: API returned None for response stream. This is unexpected with streaming.")
+            # Fallback logic (as you had)
+            # ...
         else:
-            # Iterate through streaming response if it's not None
             for chunk in response_stream:
-                # Handle the case where chunk.text might be None
-                # Get the text from different potential structures
                 chunk_text = ""
-                
-                # Try direct text property
                 if hasattr(chunk, 'text') and chunk.text is not None:
                     chunk_text = chunk.text
-                # Try looking in parts
                 elif hasattr(chunk, 'parts') and chunk.parts:
-                    # Combine text from all parts
                     for part in chunk.parts:
                         if hasattr(part, 'text') and part.text is not None:
                             chunk_text += part.text
-                # Try candidates structure
                 elif hasattr(chunk, 'candidates') and chunk.candidates:
                     for candidate in chunk.candidates:
-                        if hasattr(candidate, 'content'):
-                            content = candidate.content
-                            if hasattr(content, 'parts'):
-                                for part in content.parts:
-                                    if hasattr(part, 'text') and part.text is not None:
-                                        chunk_text += part.text
+                        if hasattr(candidate, 'content') and candidate.content and hasattr(candidate.content, 'parts'):
+                            for part in candidate.content.parts:
+                                if hasattr(part, 'text') and part.text is not None:
+                                    chunk_text += part.text
                 
-                # Add to the complete response
                 complete_response += chunk_text
-                
-                # Print to console
                 if chunk_text:
-                    print(chunk_text, end="")
+                    print(chunk_text, end="", flush=True)
                 else:
-                    print(".", end="")  # Print a dot to indicate progress for empty chunks
-                
+                    print(".", end="", flush=True)
+            print()
+
     except Exception as e:
         print(f"\n\nError during generation: {e}")
-        
-        # Last-ditch effort - try non-streaming API if streaming failed
+        # Fallback logic (as you had)
         if not complete_response:
             try:
                 print("Attempting to use non-streaming API as final fallback...")
-                response = client.models.generate_content(
-                    model=model,
+                response = gemini_model.generate_content(
                     contents=contents,
-                    config=generate_content_config,
+                    generation_config=generation_config_for_method,
                 )
-                
+                # ... (rest of your fallback logic) ...
                 if hasattr(response, 'text') and response.text:
                     complete_response = response.text
-                    print(f"Received {len(complete_response)} characters from fallback request")
+                    print(f"\nReceived {len(complete_response)} characters from fallback request")
+                elif response and hasattr(response, 'parts'):
+                    for part_ in response.parts: # renamed to avoid conflict
+                        if hasattr(part_, 'text') and part_.text is not None:
+                            complete_response += part_.text
+                    print(f"\nReceived {len(complete_response)} characters from fallback request (from parts)")
+                else:
+                    print("\nFallback response was empty or in an unexpected format.")
             except Exception as fallback_error:
                 print(f"Fallback request also failed: {fallback_error}")
-    
+
+
+    # ... (rest of your JSON parsing and saving code) ...
     # Save the raw response for debugging
     try:
         menu_bundles_raw_file = os.path.join(
@@ -798,129 +946,190 @@ Always include all four categories (A through D) in your response structure, eve
             secure_filename(restaurant_name),
             f"menu_bundles_raw_{secure_filename(restaurant_name)}.txt"
         )
-
-        with open(menu_bundles_raw_file, "w") as f:
+        with open(menu_bundles_raw_file, "w", encoding="utf-8") as f:        
             f.write(complete_response)
+        print(f"\nRaw response saved to menu_bundles_raw.txt ({len(complete_response)} chars)")
     except Exception as e:
         print(f"Error saving raw response: {e}")
-    
-    # Parse and save as JSON
+
+    # Parse and save as JSON (your existing logic from here is likely fine)
     try:
-        print("\n\nParsing response as JSON...")
-        
-        # Check if the response is empty
+        print("\nParsing response as JSON...")
         if not complete_response.strip():
             raise ValueError("Empty response received from API")
-            
-        # Try direct JSON parsing first
+
         all_valid_jsons = []
-        unique_bundles = set()  # Use a set to track unique bundles
-        
+        unique_bundles = set()
+
+        cleaned_response = complete_response.strip()
+        if cleaned_response.startswith("```json"):
+            cleaned_response = cleaned_response[7:]
+        if cleaned_response.startswith("```"): # Handle just ``` without json
+             cleaned_response = cleaned_response[3:]
+        if cleaned_response.endswith("```"):
+            cleaned_response = cleaned_response[:-3]
+        cleaned_response = cleaned_response.strip()
+
+
         try:
-            # First, try parsing the entire response as a single JSON object
-            json_data = json.loads(complete_response)
+            # First, try parsing the (cleaned) entire response as a single JSON object (likely a list of bundles)
+            json_data = json.loads(cleaned_response)
             if isinstance(json_data, list):
-                # If it's a list, use it directly
-                all_valid_jsons = json_data[:4]  # Limit to 4 bundles
+                all_valid_jsons = json_data[:4]
+            elif isinstance(json_data, dict) and "bundles" in json_data and isinstance(json_data["bundles"], list):
+                all_valid_jsons = json_data["bundles"][:4]
+            elif isinstance(json_data, dict): # If it's a single bundle object
+                 all_valid_jsons = [json_data]
             else:
-                # If it's an object, check if it has a 'bundles' property
-                if "bundles" in json_data and isinstance(json_data["bundles"], list):
-                    json_data["bundles"] = json_data["bundles"][:4]  # Limit to 4 bundles
-                all_valid_jsons = [json_data]
-        except json.JSONDecodeError:
-            print("Direct JSON parsing failed, trying extraction methods...")
+                print("Parsed JSON is not in expected list or dict format, proceeding to regex.")
+                raise json.JSONDecodeError("Not a list or expected dict", cleaned_response, 0) # Force fallback
+
+        except json.JSONDecodeError as e:
+            print(f"Direct JSON parsing failed: {e}. Trying extraction methods on raw response...")
             
-            # Look for JSON objects pattern
-            json_pattern = r'(\{(?:[^{}]|(?:\{(?:[^{}]|(?:\{[^{}]*\}))*\}))*\})'
+            # Use the original complete_response for regex matching if direct parsing fails
+            json_pattern = r'(\{(?:[^{}]|(?:\{(?:[^{}]|(?:\{[^{}]*\}))*\}))*\})' # More robust pattern
             json_matches = re.findall(json_pattern, complete_response)
-            
+
             if json_matches:
-                # Try each potential JSON match
-                potential_jsons = sorted(json_matches, key=len, reverse=True)
+                potential_jsons = sorted(list(set(json_matches)), key=len, reverse=True) # Unique matches
                 
-                for potential_json in potential_jsons:
+                for potential_json_str in potential_jsons:
+                    if len(all_valid_jsons) >= 4:
+                        break
                     try:
-                        json_data = json.loads(potential_json)
-                        # Convert to string for comparison to check uniqueness
-                        json_str = json.dumps(json_data, sort_keys=True)
-                        if json_str not in unique_bundles:
-                            unique_bundles.add(json_str)
+                        # Clean up potential JSON string further if needed
+                        # (e.g., remove leading/trailing non-JSON characters if pattern is too greedy)
+                        clean_potential_json = potential_json_str.strip()
+                        if not (clean_potential_json.startswith('{') and clean_potential_json.endswith('}')):
+                            continue # Skip if not a valid JSON object structure
+
+                        json_data = json.loads(clean_potential_json)
+                        json_str_for_uniqueness = json.dumps(json_data, sort_keys=True)
+                        if json_str_for_uniqueness not in unique_bundles:
+                            unique_bundles.add(json_str_for_uniqueness)
                             all_valid_jsons.append(json_data)
                     except json.JSONDecodeError:
                         continue
             
-            # Also try code blocks
-            code_block_matches = re.findall(r'```(?:json)?(.*?)```', complete_response, re.DOTALL)
-            for code_block in code_block_matches:
-                try:
-                    json_data = json.loads(code_block.strip())
-                    # Check uniqueness again
-                    json_str = json.dumps(json_data, sort_keys=True)
-                    if json_str not in unique_bundles:
-                        unique_bundles.add(json_str)
-                        all_valid_jsons.append(json_data)
-                except json.JSONDecodeError:
-                    continue
-        
-        # Ensure we have only 4 bundles maximum
+            # Also try code blocks from the original complete_response
+            if len(all_valid_jsons) < 4:
+                code_block_matches = re.findall(r'```(?:json)?\s*([\s\S]*?)\s*```', complete_response, re.DOTALL)
+                for code_block in code_block_matches:
+                    if len(all_valid_jsons) >= 4:
+                        break
+                    try:
+                        # If the code block itself contains a list of bundles
+                        json_data_block = json.loads(code_block.strip())
+                        if isinstance(json_data_block, list):
+                            for item in json_data_block:
+                                if len(all_valid_jsons) >= 4:
+                                    break
+                                json_str_for_uniqueness = json.dumps(item, sort_keys=True)
+                                if json_str_for_uniqueness not in unique_bundles:
+                                    unique_bundles.add(json_str_for_uniqueness)
+                                    all_valid_jsons.append(item)
+                        elif isinstance(json_data_block, dict): # A single bundle
+                            json_str_for_uniqueness = json.dumps(json_data_block, sort_keys=True)
+                            if json_str_for_uniqueness not in unique_bundles:
+                                unique_bundles.add(json_str_for_uniqueness)
+                                all_valid_jsons.append(json_data_block)
+                    except json.JSONDecodeError:
+                        # If parsing the whole block fails, try finding individual JSON objects within it
+                        inner_json_matches = re.findall(json_pattern, code_block)
+                        for inner_match_str in inner_json_matches:
+                            if len(all_valid_jsons) >= 4:
+                                break
+                            try:
+                                inner_json_data = json.loads(inner_match_str.strip())
+                                json_str_for_uniqueness = json.dumps(inner_json_data, sort_keys=True)
+                                if json_str_for_uniqueness not in unique_bundles:
+                                    unique_bundles.add(json_str_for_uniqueness)
+                                    all_valid_jsons.append(inner_json_data)
+                            except json.JSONDecodeError:
+                                continue
+
+        # Ensure we have only 4 bundles maximum from all combined efforts
         if len(all_valid_jsons) > 4:
             all_valid_jsons = all_valid_jsons[:4]
-        
-        # Save all valid JSONs to a single file
+
         if all_valid_jsons:
-            menu_bundles_file = os.path.join(
-                app.config['UPLOAD_FOLDER'],
-                secure_filename(restaurant_name),
-                f"menu_bundles_{secure_filename(restaurant_name)}.json"
-            )
+            # Validate structure of each bundle (optional but good)
+            final_bundles = []
+            for bundle in all_valid_jsons:
+                if isinstance(bundle, dict) and "Suggested_bundle_price" in bundle and "Number_of_diners" in bundle and "category_portions" in bundle:
+                    # Add basic portion validation
+                    diners = bundle.get("Number_of_diners", 0)
+                    portions = bundle.get("category_portions", {})
+                    
+                    # Check beverage portions if applicable
+                    valid_portions = True
+                    if has_beverages:
+                        total_beverages = 0
+                        for bev_cat in ["Y", "Z"]:
+                            if bev_cat in portions:
+                                bev_count = int(portions[bev_cat]) if isinstance(portions[bev_cat], (int, str)) else 0
+                                if bev_count > diners:
+                                    print(f"Warning: Bundle has {bev_count} beverages from category {bev_cat} for {diners} diners")
+                                    valid_portions = False
+                                total_beverages += bev_count
+                        
+                        if total_beverages > diners:
+                            print(f"Warning: Bundle has {total_beverages} total beverages for {diners} diners")
+                            valid_portions = False
+                    
+                    # We'll include it anyway but log warnings
+                    if valid_portions:
+                        print(f"Valid bundle created for {diners} diners")
+                    final_bundles.append(bundle)
+                else:
+                    print(f"Warning: A parsed JSON object does not match expected bundle structure: {bundle}")
             
-            with open(menu_bundles_file, "w", encoding="utf-8") as json_file:
-                json.dump(all_valid_jsons, json_file, indent=4)
-            print(f"Saved {len(all_valid_jsons)} unique menu bundles to menu_bundles.json")
+            if final_bundles:
+                menu_bundles_file = os.path.join(
+                    app.config['UPLOAD_FOLDER'],
+                    secure_filename(restaurant_name),
+                    f"menu_bundles_{secure_filename(restaurant_name)}.json"
+                )
+                with open(menu_bundles_file, "w", encoding="utf-8") as json_file:
+                    json.dump(all_valid_jsons, json_file, indent=4)
+                print(f"Saved {len(all_valid_jsons)} unique menu bundles to {menu_bundles_file}")
+            else:
+                print("No valid JSONs found in the response")
         else:
-            print("No valid JSONs found in the response")
-            
+            print("No valid JSONs found in the response after all parsing attempts.")
+            print("Please check menu_bundles_raw.txt to see the actual response.")
+
+    except ValueError as ve: # For the "Empty response" case
+        print(f"Error: {ve}")
+        print("Please check menu_bundles_raw.txt.")
     except Exception as e:
         print(f"Error: Failed to parse response as JSON: {e}")
         print("Please check menu_bundles_raw.txt to see the actual response.")
 
-### FOR EXCEL GENERATION ###
-# --- Thai Character Detection ---
-def is_thai(char):
-    """Checks if a character is within the Thai Unicode range."""
-    return '\u0E00' <= char <= '\u0E7F'
-
-def split_eng_thai(text):
+def dump_file_contents(file_path, max_lines=20):
     """
-    Splits a string containing English followed by Thai into two parts.
-    Assumes the first Thai character marks the beginning of the Thai part.
-
+    Dump the first few lines of a file to the log for debugging.
+    
     Args:
-        text (str): The combined English and Thai string.
-
-    Returns:
-        tuple: (english_part, thai_part). thai_part is "" if no Thai chars found.
+        file_path (str): Path to the file to dump
+        max_lines (int): Maximum number of lines to dump
     """
-    first_thai_index = -1
-    for i, char in enumerate(text):
-        if is_thai(char):
-            first_thai_index = i
-            break
-
-    if first_thai_index != -1:
-        # Found Thai character(s)
-        eng_part = text[:first_thai_index].strip()
-        # Ensure we capture potential spaces between Thai words too
-        thai_part = text[first_thai_index:].strip()
-        # Handle edge case where Thai might start with space if strip isn't perfect
-        # (though strip() should handle leading/trailing spaces)
-        # Example: "English Name  ชื่อไทย"
-        # eng_part = "English Name"
-        # thai_part = "ชื่อไทย"
-        return eng_part, thai_part
-    else:
-        # No Thai characters found
-        return text.strip(), ""
+    try:
+        absolute_path = os.path.abspath(file_path)
+        if not os.path.exists(absolute_path):
+            logging.error(f"File not found for debugging: {absolute_path}")
+            return
+            
+        logging.info(f"Dumping first {max_lines} lines of {file_path}:")
+        with open(absolute_path, 'r', encoding='utf-8') as f:
+            for i, line in enumerate(f):
+                if i >= max_lines:
+                    logging.info("... (more lines)")
+                    break
+                logging.info(f"  Line {i+1}: {line.rstrip()}")
+    except Exception as e:
+        logging.error(f"Error dumping file contents: {e}")
 
 def parse_menu_items_for_excel(file_path='./categorized_menu_items.txt'):
     """
@@ -937,6 +1146,7 @@ def parse_menu_items_for_excel(file_path='./categorized_menu_items.txt'):
             and lists of menu item dicts
             ({'name_en': str, 'name_th': str, 'price': float, 'category': str}) as values.
     """
+    # Initialize with basic categories but we'll dynamically add more if needed
     menu_items_by_price_band = {
         "Category A": [],
         "Category B": [],
@@ -970,13 +1180,21 @@ def parse_menu_items_for_excel(file_path='./categorized_menu_items.txt'):
                 # Check if this is a PRICE BAND header line (e.g., ----- Category A -----)
                 if line.startswith('----- Category'):
                     try:
-                        band_char = line.split('Category ')[1].strip()[0]
-                        current_price_band = f"Category {band_char}"
-                        if current_price_band not in menu_items_by_price_band:
-                            logging.warning(f"Line {line_num}: Found unexpected price band '{current_price_band}'. Ignoring section.")
-                            current_price_band = None
-                        else:
+                        # Extract price band character (A, B, C, D or any letter)
+                        band_match = re.search(r'Category\s+([A-Za-z])', line)
+                        if band_match:
+                            band_char = band_match.group(1)
+                            current_price_band = f"Category {band_char}"
+                            
+                            # Add this category to our dictionary if it doesn't exist
+                            if current_price_band not in menu_items_by_price_band:
+                                menu_items_by_price_band[current_price_band] = []
+                                logging.info(f"Line {line_num}: Added new price band '{current_price_band}' to dictionary")
+                            
                             logging.info(f"Line {line_num}: Found Price Band Header '{current_price_band}'")
+                        else:
+                            logging.warning(f"Line {line_num}: Could not extract category letter from '{line}'. Ignoring section.")
+                            current_price_band = None
                     except IndexError:
                         logging.warning(f"Line {line_num}: Malformed price band header: '{line}'. Ignoring.")
                         current_price_band = None
@@ -987,7 +1205,10 @@ def parse_menu_items_for_excel(file_path='./categorized_menu_items.txt'):
                         parts = line.split(' - ', 1)
                         if len(parts) == 2:
                             price_str = parts[0].strip()
-                            name_details_str = parts[1].strip() # Contains Eng [Thai] names and Category
+                            name_and_category_str = parts[1].strip()
+                            
+                            # Debug: Print the extracted name+category string
+                            logging.info(f"Line {line_num}: Extracted name+category: '{name_and_category_str}'")
 
                             price_value = float(price_str.replace('$', '').replace(',', ''))
 
@@ -999,43 +1220,51 @@ def parse_menu_items_for_excel(file_path='./categorized_menu_items.txt'):
                             semantic_category = "Uncategorized" # Default category
 
                             if match:
-                                combined_name_part = match.group(1).strip() # Extract combined name
-                                semantic_category = match.group(2).strip() # Extract category
-
-                                # *** NEW LOGIC: Split combined name into English and Thai ***
-                                item_name_en, item_name_th = split_eng_thai(combined_name_part)
-
-                                if not item_name_en: # Safety check if split somehow results in empty English part
-                                    logging.warning(f"Line {line_num}: Parsing resulted in empty English name for '{combined_name_part}'. Using combined as English.")
-                                    item_name_en = combined_name_part
-                                    item_name_th = ""
-
-                                logging.debug(f"Line {line_num}: Parsed Combined: '{combined_name_part}' -> EN: '{item_name_en}', TH: '{item_name_th}', Cat: '{semantic_category}'")
-
+                                item_name = match.group(1).strip() # Extract name
+                                semantic_category = match.group(2).strip() # Extract category from parentheses
+                                
+                                # Debug: Print the matched name and category
+                                logging.info(f"Line {line_num}: Matched name: '{item_name}', category: '{semantic_category}'")
                             else:
                                 # If format doesn't match "Name (Category)", treat whole string as name
                                 # and assign a default category. Log a warning.
-                                logging.warning(f"Line {line_num}: Item format mismatch. Expected '$Price - Name (Category)', got '$Price - {name_details_str}'. Using full string as Eng name, Thai name empty, Category 'Uncategorized'.")
-                                item_name_en = name_details_str # Use the whole thing as English name
-                                item_name_th = ""
-                                semantic_category = "Uncategorized"
+                                logging.warning(f"Line {line_num}: Item format mismatch. Expected '$Price - Name (Category)', got '$Price - {name_and_category_str}'. Using full string as name.")
+                                item_name = name_and_category_str
+                                semantic_category = "Uncategorized" # Default semantic category
+                                
+                                # Debug: Print the fallback name assignment
+                                logging.info(f"Line {line_num}: Fallback name: '{item_name}', category: '{semantic_category}'")
 
-                            # Append the item data
-                            menu_items_by_price_band[current_price_band].append({
-                                'name_en': item_name_en,
-                                'name_th': item_name_th,
+                            # Create and append the item data (including semantic category) to the current price band list
+                            menu_item = {
+                                'name': item_name,
                                 'price': price_value,
-                                'category': semantic_category
-                            })
+                                'category': semantic_category,  # Store the extracted semantic category
+                                'price_band': current_price_band  # Store which price band this belongs to
+                            }
+                            
+                            # Debug: Print the full item dictionary before appending
+                            logging.info(f"Line {line_num}: Adding item: {menu_item}")
+                            
+                            menu_items_by_price_band[current_price_band].append(menu_item)
                             items_parsed_count += 1
                         else:
-                            logging.warning(f"Line {line_num}: Malformed item line. Expected format '$Price - Name details (Category)', got: '{line}'.")
-                    except ValueError:
-                        logging.warning(f"Line {line_num}: Could not parse price from '{price_str}'. Skipping item: '{line}'.")
+                            logging.warning(f"Line {line_num}: Malformed item line. Expected format '$Price - Name (Category)', got: '{line}'.")
+                    except ValueError as ve:
+                        logging.warning(f"Line {line_num}: Could not parse price from '{parts[0] if len(parts) > 0 else line}'. Error: {ve}. Skipping item: '{line}'.")
                     except Exception as e:
                         logging.error(f"Line {line_num}: Error processing item line: '{line}'. Error: {e}", exc_info=True)
                 elif current_price_band and line:
                     logging.info(f"Line {line_num}: Skipping non-item line within {current_price_band}: '{line}'")
+
+        # Debug: Print the final data structure
+        logging.info("Final parsed menu items structure:")
+        for band, items in menu_items_by_price_band.items():
+            logging.info(f"  {band}: {len(items)} items")
+            for item in items:
+                logging.info(f"    - Name: '{item.get('name', 'MISSING')}', "
+                           f"Price: {item.get('price', 'MISSING')}, "
+                           f"Category: '{item.get('category', 'MISSING')}'")
 
         if items_parsed_count > 0:
             logging.info(f"Successfully parsed {items_parsed_count} menu items from {file_path}")
@@ -1047,8 +1276,17 @@ def parse_menu_items_for_excel(file_path='./categorized_menu_items.txt'):
         logging.warning("Using default menu items because the file could not be read.")
         # Defaults remain the same structure internally
         menu_items_by_price_band["Category A"] = [
-            {"name_en": "Default BBQ ribs", "name_th": "ซี่โครงหมูบาร์บีคิว (ค่าเริ่มต้น)", "price": 700.0, "category": "Main Course"},
-            {"name_en": "Default Chimichurri steak", "name_th": "สเต็กชิมิชูรี (ค่าเริ่มต้น)", "price": 590.0, "category": "Main Course"},
+            {"name": "Default BBQ ribs", "price": 700.0, "category": "Main Course", "price_band": "Category A"},
+            {"name": "Default Chimichurri steak", "price": 590.0, "category": "Main Course", "price_band": "Category A"},
+        ]
+        menu_items_by_price_band["Category B"] = [
+            {"name": "Default Milk Shakes", "price": 190.0, "category": "Beverage", "price_band": "Category B"},
+        ]
+        menu_items_by_price_band["Category C"] = [
+            {"name": "Default Strawberry blast", "price": 100.0, "category": "Beverage", "price_band": "Category C"},
+        ]
+        menu_items_by_price_band["Category D"] = [
+            {"name": "Default Extra shot", "price": 25.0, "category": "Add-on", "price_band": "Category D"},
         ]
         menu_items_by_price_band["Category B"] = [{"name_en": "Default Milk Shakes", "name_th": "มิลค์เชค (ค่าเริ่มต้น)", "price": 190.0, "category": "Beverage"}]
         menu_items_by_price_band["Category C"] = [{"name_en": "Default Strawberry blast", "name_th": "สตรอเบอร์รี่ บลาสท์ (ค่าเริ่มต้น)", "price": 100.0, "category": "Beverage"}]
@@ -1056,24 +1294,155 @@ def parse_menu_items_for_excel(file_path='./categorized_menu_items.txt'):
     except Exception as e:
         logging.error(f"An unexpected error occurred while reading menu items file: {e}", exc_info=True)
         logging.warning("Using default menu items due to the error.")
-        menu_items_by_price_band["Category A"] = [{"name_en": "Error Default A", "name_th": "ข้อผิดพลาด A", "price": 1.0, "category": "Error"}]
-        menu_items_by_price_band["Category B"] = [{"name_en": "Error Default B", "name_th": "ข้อผิดพลาด B", "price": 1.0, "category": "Error"}]
-        menu_items_by_price_band["Category C"] = [{"name_en": "Error Default C", "name_th": "ข้อผิดพลาด C", "price": 1.0, "category": "Error"}]
-        menu_items_by_price_band["Category D"] = [{"name_en": "Error Default D", "name_th": "ข้อผิดพลาด D", "price": 1.0, "category": "Error"}]
+        # Populate with defaults including category key
+        menu_items_by_price_band["Category A"] = [{"name": "Error Default A", "price": 1.0, "category": "Error", "price_band": "Category A"}]
+        menu_items_by_price_band["Category B"] = [{"name": "Error Default B", "price": 1.0, "category": "Error", "price_band": "Category B"}]
+        menu_items_by_price_band["Category C"] = [{"name": "Error Default C", "price": 1.0, "category": "Error", "price_band": "Category C"}]
+        menu_items_by_price_band["Category D"] = [{"name": "Error Default D", "price": 1.0, "category": "Error", "price_band": "Category D"}]
 
+    # Print summary of parsed items
     logging.info("--- Parsed Menu Items Summary (by Price Band) ---")
     for price_band, items in menu_items_by_price_band.items():
         logging.info(f"  {price_band}: {len(items)} items")
-        # for item in items[:2]: # Uncomment for detailed debug
-        #     logging.info(f"    - EN='{item['name_en']}', TH='{item['name_th']}', Price={item['price']}, Cat='{item['category']}'")
-        # if len(items) > 2: logging.info("    - ...")
+        # Optional: Print first few items for verification
+        if items:
+            for item in items[:min(3, len(items))]:
+                logging.info(f"    - {item.get('name', 'MISSING')} (${item.get('price', 0):.2f}) ({item.get('category', 'MISSING')})")
+            if len(items) > 3:
+                logging.info("    - ...")
     logging.info("-------------------------------------------------")
 
-    return menu_items_by_price_band
+    return menu_items_by_price_band # Return the dictionary structured by price bands
 
-def create_menu_sheet(workbook, menu_items_by_price_band):
+def create_raw_menu_sheet(workbook, menu_items_by_price_band):
     """
-    Creates the 'Menu Items' sheet in the workbook, including a Thai Name column.
+    Creates a 'Raw Menu Items' sheet displaying all menu items in a flat list format.
+    This sheet allows editing and reflects changes in the Menu Items sheet.
+    
+    Args:
+        workbook: The openpyxl workbook to modify
+        menu_items_by_price_band: Dictionary structured by price bands, containing lists of item dictionaries
+        
+    Returns:
+        tuple: (sheet, menu_item_row_map) where menu_item_row_map maps items to their row numbers in this sheet
+    """
+    raw_menu_sheet = workbook.create_sheet(title='Raw Menu Items')
+    
+    # --- Define styles ---
+    red_fill = PatternFill(start_color="FF0000", end_color="FF0000", fill_type="solid")
+    light_gray_fill = PatternFill(start_color="F0F0F0", end_color="F0F0F0", fill_type="solid")
+    white_font = Font(color="FFFFFF", bold=True, size=14)
+    bold_font = Font(bold=True)
+    center_aligned = Alignment(horizontal='center', vertical='center', wrap_text=True)
+    left_aligned = Alignment(horizontal='left', vertical='center', wrap_text=True)
+    border = Border(
+        left=Side(style='thin'), 
+        right=Side(style='thin'), 
+        top=Side(style='thin'), 
+        bottom=Side(style='thin')
+    )
+    
+    # --- Sheet Header ---
+    raw_menu_sheet.merge_cells('A1:C1')  # Changed from A1:D1 to A1:C1 (removed Price Band column)
+    header_cell = raw_menu_sheet['A1']
+    header_cell.value = "Raw Menu Items (All Items Flattened)"
+    header_cell.fill = red_fill
+    header_cell.font = white_font
+    header_cell.alignment = center_aligned
+    raw_menu_sheet.row_dimensions[1].height = 25
+    
+    # --- Column Headers ---
+    column_headers = ["Item Name", "Price", "Semantic Category"]  # Removed "Price Band"
+    for col, header in enumerate(column_headers, start=1):
+        cell = raw_menu_sheet.cell(row=2, column=col)
+        cell.value = header
+        cell.font = bold_font
+        cell.alignment = center_aligned
+        cell.fill = light_gray_fill
+        cell.border = border
+    
+    raw_menu_sheet.row_dimensions[2].height = 20
+    
+    # --- Set column widths ---
+    raw_menu_sheet.column_dimensions['A'].width = 45  # Item Name - made wider
+    raw_menu_sheet.column_dimensions['B'].width = 15  # Price
+    raw_menu_sheet.column_dimensions['C'].width = 35  # Semantic Category - made wider
+    
+    # --- Add help text to explain how to use the sheet ---
+    help_row = 3
+    raw_menu_sheet.merge_cells(f'A{help_row}:C{help_row}')
+    help_cell = raw_menu_sheet.cell(row=help_row, column=1)
+    help_cell.value = "Edit values in this sheet to automatically update the Menu Items sheet"
+    help_cell.font = Font(italic=True, color="FF0000")
+    help_cell.alignment = center_aligned
+    
+    # Starting row for menu items
+    current_row = 4
+    total_items = 0
+    
+    # Dictionary to track which row each menu item is in (for referencing from Menu Items sheet)
+    menu_item_row_map = {}
+    
+    # Create a flattened list of all items with their price band
+    flattened_items = []
+    for price_band, items in menu_items_by_price_band.items():
+        for item in items:
+            item_with_band = item.copy()  
+            item_with_band['price_band'] = price_band  # Include the price band info
+            flattened_items.append(item_with_band)
+    
+    # Sort the flattened items by name for easier reference
+    flattened_items.sort(key=lambda x: x.get('name', '').lower())
+    
+    # Populate the sheet with the sorted items
+    for item in flattened_items:
+        # Store the row number for this item (keyed by name and price band)
+        item_key = (item.get('name', ''), item.get('price_band', ''))
+        menu_item_row_map[item_key] = current_row
+                
+        # Column A: Item Name
+        cell = raw_menu_sheet.cell(row=current_row, column=1)
+        cell.value = item.get('name', 'N/A')
+        cell.alignment = left_aligned
+        cell.border = border
+        
+        # Column B: Price
+        cell = raw_menu_sheet.cell(row=current_row, column=2)
+        cell.value = item.get('price', 0)
+        cell.number_format = '#,##0.00'
+        cell.alignment = center_aligned
+        cell.border = border
+        
+        # Column C: Semantic Category
+        cell = raw_menu_sheet.cell(row=current_row, column=3)
+        cell.value = item.get('category', 'Unknown')
+        cell.alignment = left_aligned
+        cell.border = border
+        
+        # Apply alternating row colors
+        if current_row % 2 == 0:
+            for col in range(1, 4):  # Changed from 1-5 to 1-4 (removed Price Band column)
+                raw_menu_sheet.cell(row=current_row, column=col).fill = PatternFill(
+                    start_color="F9F9F9", end_color="F9F9F9", fill_type="solid"
+                )
+        
+        current_row += 1
+        total_items += 1
+    
+    # --- Add a count summary at the bottom ---
+    summary_row = current_row + 1
+    raw_menu_sheet.merge_cells(f'A{summary_row}:C{summary_row}')  # Changed from A:D to A:C
+    summary_cell = raw_menu_sheet.cell(row=summary_row, column=1)
+    summary_cell.value = f"Total Items: {total_items}"
+    summary_cell.font = bold_font
+    summary_cell.alignment = left_aligned
+    
+    logging.info(f"'Raw Menu Items' sheet created with {total_items} menu items.")
+    return raw_menu_sheet, menu_item_row_map
+
+def create_menu_sheet(workbook, menu_items_by_price_band, menu_item_row_map):
+    """
+    Creates the 'Menu Items' sheet in the workbook with references to the Raw Menu Items sheet.
     Column A ('Category') now uses the semantic category parsed from the file.
     Column B is English Name, Column C is Thai Name.
 
@@ -1081,7 +1450,7 @@ def create_menu_sheet(workbook, menu_items_by_price_band):
         workbook: The openpyxl workbook to modify
         menu_items_by_price_band: Dictionary structured by price bands ('Category A', 'B', etc.),
                                 containing lists of item dictionaries
-                                {'name_en': str, 'name_th': str, 'price': float, 'category': str}.
+        menu_item_row_map: Dictionary mapping item names to their row numbers in the Raw Menu Items sheet
     """
     menu_sheet = workbook.create_sheet(title='Menu Items')
 
@@ -1129,8 +1498,10 @@ def create_menu_sheet(workbook, menu_items_by_price_band):
     current_row = 3
 
     # --- Populate Menu Items ---
-    for price_band_key in ["Category A", "Category B", "Category C", "Category D"]:
-        menu_sheet.merge_cells(start_row=current_row, start_column=1, end_row=current_row, end_column=6) # Merge across 6
+    # Iterate through all price bands in the dictionary
+    for price_band_key in menu_items_by_price_band.keys():
+        # Add the Price Band header row (e.g., "Category A")
+        menu_sheet.merge_cells(start_row=current_row, start_column=1, end_row=current_row, end_column=5)
         top_left_cell = menu_sheet.cell(row=current_row, column=1, value=price_band_key)
         top_left_cell.fill = red_fill; top_left_cell.font = white_font; top_left_cell.alignment = center_aligned
         menu_sheet.row_dimensions[current_row].height = 22
@@ -1140,62 +1511,103 @@ def create_menu_sheet(workbook, menu_items_by_price_band):
 
         if not items_in_band:
             logging.info(f"No items found for Price Band {price_band_key} to populate in the 'Menu Items' sheet.")
-            continue
+            continue # Skip to the next price band
 
+        # Add each menu item from the list for this band
         for item_dict in items_in_band:
-            # Col A: Category
-            semantic_category = item_dict.get('category', 'Unknown')
-            cell = menu_sheet.cell(row=current_row, column=1, value=semantic_category)
-            cell.alignment = left_aligned; cell.border = border
+            # Find this item in the Raw Menu Items sheet
+            item_key = (item_dict.get('name', ''), price_band_key)
+            if item_key in menu_item_row_map:
+                raw_menu_row = menu_item_row_map[item_key]
+                
+                # Column A: Semantic Category - Link to Raw Menu Items sheet
+                cell = menu_sheet.cell(row=current_row, column=1)
+                cell.value = f"='Raw Menu Items'!C{raw_menu_row}"  # Reference the Category in Raw Menu Items
+                cell.alignment = left_aligned
+                cell.border = border
 
-            # Col B: English Name
-            item_name_en = item_dict.get('name_en', 'N/A')
-            cell = menu_sheet.cell(row=current_row, column=2, value=item_name_en)
-            cell.alignment = left_aligned; cell.border = border
+                # Column B: Menu Name - Link to Raw Menu Items sheet
+                cell = menu_sheet.cell(row=current_row, column=2)
+                cell.value = f"='Raw Menu Items'!A{raw_menu_row}"  # Reference the Name in Raw Menu Items
+                cell.alignment = left_aligned
+                cell.border = border
 
-            # Col C: Thai Name
-            item_name_th = item_dict.get('name_th', '')
-            cell = menu_sheet.cell(row=current_row, column=3, value=item_name_th)
-            cell.alignment = left_aligned; cell.border = border
+                # Column C: Description (Thai) - Placeholder (remains unchanged)
+                cell = menu_sheet.cell(row=current_row, column=3, value="")
+                cell.alignment = left_aligned
+                cell.border = border
 
-            # Col D: Description
-            cell = menu_sheet.cell(row=current_row, column=4, value="")
-            cell.alignment = left_aligned; cell.border = border
+                # Column D: Menu Price - Link to Raw Menu Items sheet
+                cell = menu_sheet.cell(row=current_row, column=4)
+                cell.value = f"='Raw Menu Items'!B{raw_menu_row}"  # Reference the Price in Raw Menu Items
+                cell.number_format = '#,##0.00'; cell.alignment = center_aligned; cell.border = border
 
-            # Col E: Price
-            price = item_dict.get('price', 0.0)
-            cell = menu_sheet.cell(row=current_row, column=5, value=price)
-            cell.number_format = '#,##0.00'; cell.alignment = center_aligned; cell.border = border
-
-            # Col F: Net Price
-            net_price = round(price * 1.177)
-            cell = menu_sheet.cell(row=current_row, column=6, value=net_price)
-            cell.number_format = '#,##0'; cell.alignment = center_aligned; cell.border = border
+                # Column E: Price (NET) - Calculated based on the referenced price
+                cell = menu_sheet.cell(row=current_row, column=5)
+                cell.value = f"=ROUND(D{current_row}*1.177,0)"  # Calculate NET price as a formula
+                cell.number_format = '#,##0'; cell.alignment = center_aligned; cell.border = border
+            else:
+                # Fallback if item not found in Raw Menu Items (shouldn't happen)
+                logging.warning(f"Item {item_key} not found in Raw Menu Items sheet. Using direct values.")
+                
+                # Column A: Category (direct value)
+                cell = menu_sheet.cell(row=current_row, column=1, value=item_dict.get('category', 'Unknown'))
+                cell.alignment = left_aligned
+                cell.border = border
+                
+                # Column B: Name (direct value)
+                cell = menu_sheet.cell(row=current_row, column=2, value=item_dict.get('name', 'N/A'))
+                cell.alignment = left_aligned
+                cell.border = border
+                
+                # Column C: Description (Thai) - Placeholder
+                cell = menu_sheet.cell(row=current_row, column=3, value="")
+                cell.alignment = left_aligned
+                cell.border = border
+                
+                # Column D: Price (direct value)
+                price = item_dict.get('price', 0.0)
+                cell = menu_sheet.cell(row=current_row, column=4, value=price)
+                cell.number_format = '#,##0.00'; cell.alignment = center_aligned; cell.border = border
+                
+                # Column E: NET Price (calculated)
+                net_price = round(price * 1.177)
+                cell = menu_sheet.cell(row=current_row, column=5, value=net_price)
+                cell.number_format = '#,##0'; cell.alignment = center_aligned; cell.border = border
 
             current_row += 1
 
-    logging.info(f"'Menu Items' sheet created with Thai names. Last populated row: {current_row - 1}")
+    logging.info(f"'Menu Items' sheet created with linked cells. Last populated row: {current_row - 1}")
     return menu_sheet
 
-# --- create_hungry_hub_proposal remains the same as the previous version ---
-# It uses the output from the *updated* parse_menu_items and create_menu_sheet
-def create_hungry_hub_proposal(restaurant_name, json_file='./menu_bundles.json', menu_file='./categorized_menu_items.txt', output_file='HH_Proposal_Generated.xlsx'):
+def create_hungry_hub_proposal(json_file='./menu_bundles.json', menu_file='./categorized_menu_items.txt', output_file='HH_Proposal_Generated.xlsx'):
     """
-    Creates the main Excel proposal file with both sheets.
-    Uses the updated parse_menu_items and create_menu_sheet functions.
+    Creates the main Excel proposal file with three sheets:
+    1. HH Proposal - the main proposal sheet
+    2. Menu Items - categorized menu items (linked to Raw Menu Items)
+    3. Raw Menu Items - flattened list of all menu items (editable)
     """
-    # Step 1: Read bundle data (No changes)
+    # Dump the contents of the menu file for debugging
+    dump_file_contents(menu_file)
+    
+    # Step 1: Read bundle data
     try:
         json_abs_path = os.path.abspath(json_file)
         logging.info(f"Attempting to read bundles from: {json_abs_path}")
         with open(json_abs_path, 'r', encoding='utf-8') as file:
             menu_bundles = json.load(file)
         logging.info(f"Successfully loaded {len(menu_bundles)} bundles from {json_file}")
+        
+        # Debug: Print loaded JSON to see the actual keys
+        for i, bundle in enumerate(menu_bundles):
+            logging.info(f"Bundle {i}: Keys = {list(bundle.keys())}")
+            
         if len(menu_bundles) < 4:
             logging.warning(f"JSON file contains only {len(menu_bundles)} bundles, template expects 4.")
     except (FileNotFoundError, json.JSONDecodeError) as e:
         logging.error(f"Error reading JSON file '{json_file}': {e}")
         logging.warning("Using default menu bundles as fallback.")
+        # Default bundles definition
         menu_bundles = [
             { "bundle_name": "Default A", "Suggested_bundle_price": "$3000", "Number_of_diners": 6, "category_portions": {"Category A": 3, "Category B": 4, "Category C": 2, "Category D": 1}, "Original_bundle_price": "$3500", "Discount_percentage": "15%", "Price_per_diner": "$500" },
             { "bundle_name": "Default B", "Suggested_bundle_price": "$4000", "Number_of_diners": 8, "category_portions": {"Category A": 4, "Category B": 6, "Category C": 3, "Category D": 2}, "Original_bundle_price": "$4800", "Discount_percentage": "20%", "Price_per_diner": "$500" },
@@ -1204,15 +1616,26 @@ def create_hungry_hub_proposal(restaurant_name, json_file='./menu_bundles.json',
         ]
         menu_bundles = menu_bundles[:4] # Ensure exactly 4
 
-    # Step 2: Parse menu items using the UPDATED parser (handles new format)
-    menu_items_data = parse_menu_items_for_excel(menu_file) # <-- Uses the new parsing logic
+    # Extract all unique category keys from all bundles
+    all_categories = set()
+    for bundle in menu_bundles:
+        if 'category_portions' in bundle and isinstance(bundle['category_portions'], dict):
+            for category in bundle['category_portions'].keys():
+                all_categories.add(category)
+    
+    # Sort categories alphabetically for consistent display
+    all_categories = sorted(list(all_categories))
+    logging.info(f"Found {len(all_categories)} unique categories in menu bundles: {all_categories}")
 
-    # Step 3: Create Workbook and 'HH Proposal' Sheet (No changes)
+    # Parse menu items with our improved function
+    menu_items_data = parse_menu_items_for_excel(menu_file)  # Changed from parse_menu_items to parse_menu_items_for_excel
+
+    # Step 3: Create Workbook and 'HH Proposal' Sheet
     workbook = openpyxl.Workbook()
     worksheet = workbook.active
     worksheet.title = 'HH Proposal'
 
-    # Step 4: Define styles (No changes)
+    # Step 4: Define styles
     red_fill = PatternFill(start_color="FF0000", end_color="FF0000", fill_type="solid")
     light_yellow_fill = PatternFill(start_color="FFFFD4", end_color="FFFFD4", fill_type="solid")
     bright_yellow_fill = PatternFill(start_color="FFFF00", end_color="FFFF00", fill_type="solid")
@@ -1223,7 +1646,6 @@ def create_hungry_hub_proposal(restaurant_name, json_file='./menu_bundles.json',
     border = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
 
     # --- Populate 'HH Proposal' Sheet ---
-    # (Code for rows 1-18 content remains the same - omitted here for brevity)
     # Header
     worksheet.merge_cells('A1:I1')
     header_cell = worksheet['A1']; header_cell.value = "Hungry Hub PARTY PACK PROPOSAL"
@@ -1242,48 +1664,59 @@ def create_hungry_hub_proposal(restaurant_name, json_file='./menu_bundles.json',
         {"name": "Pack D", "columns": "H:I", "bundle_index": 3}
     ]
     for pack in pack_definitions:
-        cell_range = f"{pack['columns'].split(':')[0]}3:{pack['columns'].split(':')[1]}3"
-        worksheet.merge_cells(cell_range)
-        cell = worksheet[cell_range.split(':')[0]]
-        bundle_name = menu_bundles[pack['bundle_index']].get('bundle_name', pack['name'])
-        cell.value = bundle_name; cell.alignment = center_aligned; cell.font = bold_font
+        if pack['bundle_index'] < len(menu_bundles):  # Make sure we don't go out of bounds
+            cell_range = f"{pack['columns'].split(':')[0]}3:{pack['columns'].split(':')[1]}3"
+            worksheet.merge_cells(cell_range)
+            cell = worksheet[cell_range.split(':')[0]]
+            # Get bundle name, defaulting to pack name if not found
+            bundle_name = menu_bundles[pack['bundle_index']].get('bundle_name', pack['name'])
+            cell.value = bundle_name; cell.alignment = center_aligned; cell.font = bold_font
+        
     # HH Selling Price (NET) Row 4
     worksheet['A4'] = "HH Selling Price (NET)"; worksheet['A4'].font = bold_font
     for pack in pack_definitions:
-        col_start, col_end = pack['columns'].split(':')
-        cell_range = f"{col_start}4:{col_end}4"; worksheet.merge_cells(cell_range)
-        price_value_raw = menu_bundles[pack['bundle_index']].get('Suggested_bundle_price', 0) # Default to number 0
-        price = 0.0 # Initialize price
-        try:
-            if isinstance(price_value_raw, str):
-                price = float(price_value_raw.replace('$', '').replace(',', ''))
-            elif isinstance(price_value_raw, (int, float)):
-                price = float(price_value_raw)
-            else:
-                logging.warning(f"Unexpected type for Suggested_bundle_price: {type(price_value_raw)}. Using 0.")
-                price = 0.0
-        except ValueError:
-            logging.warning(f"Could not convert Suggested_bundle_price '{price_value_raw}' to float. Using 0.")
+        if pack['bundle_index'] < len(menu_bundles):  # Safety check
+            col_start, col_end = pack['columns'].split(':')
+            cell_range = f"{col_start}4:{col_end}4"; worksheet.merge_cells(cell_range)
+
+            # Use 'Suggested_bundle_price' (exact match to JSON)
+            price_value_raw = menu_bundles[pack['bundle_index']].get('Suggested_bundle_price', 0)
             price = 0.0
-        cell = worksheet[col_start + '4']
-        cell.value = price
-        cell.number_format = '#,##0'; cell.alignment = center_aligned; cell.fill = light_yellow_fill
+            try:
+                if isinstance(price_value_raw, str):
+                    price = float(price_value_raw.replace('$', '').replace(',', ''))
+                elif isinstance(price_value_raw, (int, float)):
+                    price = float(price_value_raw)
+                else:
+                    logging.warning(f"Unexpected type for Suggested_bundle_price: {type(price_value_raw)}. Using 0.")
+                    price = 0.0
+            except ValueError:
+                logging.warning(f"Could not convert Suggested_bundle_price '{price_value_raw}' to float. Using 0.")
+                price = 0.0
+
+            cell = worksheet[col_start + '4']
+            cell.value = price
+            cell.number_format = '#,##0'; cell.alignment = center_aligned; cell.fill = light_yellow_fill
 
     # Max Diners Row 5
     worksheet['A5'] = "Max Diners / Set"; worksheet['A5'].font = bold_font
     for pack in pack_definitions:
-        col_start, col_end = pack['columns'].split(':')
-        cell_range = f"{col_start}5:{col_end}5"; worksheet.merge_cells(cell_range)
-        diners = menu_bundles[pack['bundle_index']].get('Number_of_diners', 0)
-        cell = worksheet[col_start + '5']
-        cell.value = diners; cell.number_format = '0'; cell.alignment = center_aligned; cell.fill = light_yellow_fill
+        if pack['bundle_index'] < len(menu_bundles):  # Safety check
+            col_start, col_end = pack['columns'].split(':')
+            cell_range = f"{col_start}5:{col_end}5"; worksheet.merge_cells(cell_range)
+            
+            # Use 'Number_of_diners' (exact match to JSON)
+            diners = menu_bundles[pack['bundle_index']].get('Number_of_diners', 0)
+            cell = worksheet[col_start + '5']
+            cell.value = diners; cell.number_format = '0'; cell.alignment = center_aligned; cell.fill = light_yellow_fill
 
     # Remarks Row 6
     worksheet['A6'] = "Remarks"; worksheet['A6'].font = bold_font
     for pack in pack_definitions:
-        col_start, col_end = pack['columns'].split(':')
-        cell_range = f"{col_start}6:{col_end}6"; worksheet.merge_cells(cell_range)
-        worksheet[col_start + '6'] = "1 Water / Person"; worksheet[col_start + '6'].alignment = center_aligned
+        if pack['bundle_index'] < len(menu_bundles):  # Safety check
+            col_start, col_end = pack['columns'].split(':')
+            cell_range = f"{col_start}6:{col_end}6"; worksheet.merge_cells(cell_range)
+            worksheet[col_start + '6'] = "1 Water / Person"; worksheet[col_start + '6'].alignment = center_aligned
 
     # Menu Section Header Row 7
     worksheet.merge_cells('A7:I7')
@@ -1291,165 +1724,214 @@ def create_hungry_hub_proposal(restaurant_name, json_file='./menu_bundles.json',
     menu_header.fill = red_fill; menu_header.font = white_font; menu_header.alignment = center_aligned
     worksheet.row_dimensions[7].height = 25
 
-    # Category Rows 8-11
-    group_rows = {"Category A": 8, "Category B": 9, "Category C": 10, "Category D": 11}
-    for category_band, row in group_rows.items():
-        worksheet[f'A{row}'] = category_band
-        worksheet[f'A{row}'].font = bold_font
+    # DYNAMIC: Category Rows - starting from row 8
+    current_row = 8
+    for category_band in all_categories:
+        worksheet[f'A{current_row}'] = category_band
+        worksheet[f'A{current_row}'].font = bold_font
+        
+        logging.info(f"Processing {category_band} on row {current_row}")
+        
         for pack in pack_definitions:
+            if pack['bundle_index'] < len(menu_bundles):  # Safety check
+                col_start, col_end = pack['columns'].split(':')
+                cell_range = f"{col_start}{current_row}:{col_end}{current_row}"
+                worksheet.merge_cells(cell_range)
+                
+                bundle_data = menu_bundles[pack['bundle_index']]
+                bundle_name = bundle_data.get('bundle_name', f"Bundle {pack['bundle_index'] + 1}")
+                
+                logging.info(f"  Processing bundle: {bundle_name}")
+                
+                portions = 0
+                
+                if 'category_portions' in bundle_data:
+                    if isinstance(bundle_data['category_portions'], dict):
+                        logging.info(f"    Available categories: {list(bundle_data['category_portions'].keys())}")
+                        
+                        if category_band in bundle_data['category_portions']:
+                            portions_raw = bundle_data['category_portions'][category_band]
+                            try:
+                                portions = int(portions_raw)
+                            except (ValueError, TypeError):
+                                portions = 0
+                                logging.warning(f"    Could not convert '{portions_raw}' to int for {category_band}")
+                        else:
+                            logging.warning(f"    {category_band} not found in category_portions")
+                    else:
+                        logging.warning(f"    category_portions is not a dict: {type(bundle_data['category_portions'])}")
+                else:
+                    logging.warning(f"    No category_portions key found in bundle")
+                
+                cell = worksheet[col_start + str(current_row)]
+                cell.value = portions
+                cell.number_format = '0'
+                cell.alignment = center_aligned
+                cell.fill = light_yellow_fill
+                
+                logging.info(f"    Set cell {col_start}{current_row} to {portions}")
+        
+        current_row += 1  # Move to next row for next category
+
+    # Total Dishes Row - after all category rows
+    total_dishes_row = current_row
+    worksheet[f'A{total_dishes_row}'] = "Total Dishes"; worksheet[f'A{total_dishes_row}'].font = bold_font
+    for pack in pack_definitions:
+        if pack['bundle_index'] < len(menu_bundles):  # Safety check
             col_start, col_end = pack['columns'].split(':')
-            cell_range = f"{col_start}{row}:{col_end}{row}"
-            worksheet.merge_cells(cell_range)
-            bundle_data = menu_bundles[pack['bundle_index']]
-            portions = 0
+            cell_range = f"{col_start}{total_dishes_row}:{col_end}{total_dishes_row}"; worksheet.merge_cells(cell_range)
+            total_dishes = 0; bundle_data = menu_bundles[pack['bundle_index']]
             if 'category_portions' in bundle_data and isinstance(bundle_data['category_portions'], dict):
-                if category_band in bundle_data['category_portions']:
-                    portions_raw = bundle_data['category_portions'][category_band]
-                    try:
-                        portions = int(portions_raw)
-                    except (ValueError, TypeError):
-                        portions = 0
-                        logging.warning(f"    Could not convert '{portions_raw}' to int for {category_band}")
+                total_dishes = sum(bundle_data['category_portions'].values())
+            cell = worksheet[f"{col_start}{total_dishes_row}"]
+            cell.value = total_dishes; cell.number_format = '0'; cell.alignment = center_aligned
 
-            cell = worksheet[col_start + str(row)]
-            cell.value = portions
-            cell.number_format = '0'
-            cell.alignment = center_aligned
-            cell.fill = light_yellow_fill
-
-    # Total Dishes Row 12
-    worksheet['A12'] = "Total Dishes"; worksheet['A12'].font = bold_font
-    for pack in pack_definitions:
-        col_start, col_end = pack['columns'].split(':')
-        cell_range = f"{col_start}12:{col_end}12"; worksheet.merge_cells(cell_range)
-        total_dishes = 0; bundle_data = menu_bundles[pack['bundle_index']]
-        if 'category_portions' in bundle_data and isinstance(bundle_data['category_portions'], dict):
-            try:
-                total_dishes = sum(int(v) for v in bundle_data['category_portions'].values() if isinstance(v, (int, float, str)) and str(v).isdigit())
-            except ValueError:
-                logging.warning(f"Could not sum portions for bundle {bundle_data.get('bundle_name')}, contains non-numeric values.")
-                total_dishes = 'Error'
-        cell = worksheet[f"{col_start}12"]
-        cell.value = total_dishes; cell.number_format = '0'; cell.alignment = center_aligned
-
-    # Avg Price Header Row 13
-    worksheet.merge_cells('A13:I13')
-    price_header = worksheet['A13']; price_header.value = "Average NET Selling Price / Discounts"
+    # Avg Price Header Row - 1 row after Total Dishes
+    avg_price_header_row = total_dishes_row + 1
+    worksheet.merge_cells(f'A{avg_price_header_row}:I{avg_price_header_row}')
+    price_header = worksheet[f'A{avg_price_header_row}']; price_header.value = "Average NET Selling Price / Discounts"
     price_header.fill = red_fill; price_header.font = white_font; price_header.alignment = center_aligned
-    worksheet.row_dimensions[13].height = 25
+    worksheet.row_dimensions[avg_price_header_row].height = 25
 
-    # Avg NET Selling Price Row 14 (Original Price)
-    worksheet['A14'] = "Average NET Selling Price"; worksheet['A14'].font = bold_font
+    # Avg NET Selling Price Row (Original Price) - 1 row after the header
+    avg_price_row = avg_price_header_row + 1
+    worksheet[f'A{avg_price_row}'] = "Average NET Selling Price"; worksheet[f'A{avg_price_row}'].font = bold_font
     for pack in pack_definitions:
-        col_start, col_end = pack['columns'].split(':')
-        cell_range = f"{col_start}14:{col_end}14"; worksheet.merge_cells(cell_range)
-        price_value_raw = menu_bundles[pack['bundle_index']].get('Original_bundle_price', 0)
-        price = 0.0
-        try:
-            if isinstance(price_value_raw, str):
-                price = float(price_value_raw.replace('$', '').replace(',', ''))
-            elif isinstance(price_value_raw, (int, float)):
-                price = float(price_value_raw)
-            else:
-                logging.warning(f"Unexpected type for Original_bundle_price: {type(price_value_raw)}. Using 0.")
-                price = 0.0
-        except ValueError:
-            logging.warning(f"Could not convert Original_bundle_price '{price_value_raw}' to float. Using 0.")
+        if pack['bundle_index'] < len(menu_bundles):  # Safety check
+            col_start, col_end = pack['columns'].split(':')
+            cell_range = f"{col_start}{avg_price_row}:{col_end}{avg_price_row}"; worksheet.merge_cells(cell_range)
+
+            # Use 'Original_bundle_price' (exact match to JSON)
+            price_value_raw = menu_bundles[pack['bundle_index']].get('Original_bundle_price', 0)
             price = 0.0
-        cell = worksheet[col_start + '14']
-        cell.value = price
-        cell.number_format = '#,##0'; cell.alignment = center_aligned
+            try:
+                if isinstance(price_value_raw, str):
+                    price = float(price_value_raw.replace('$', '').replace(',', ''))
+                elif isinstance(price_value_raw, (int, float)):
+                    price = float(price_value_raw)
+                else:
+                    logging.warning(f"Unexpected type for Original_bundle_price: {type(price_value_raw)}. Using 0.")
+                    price = 0.0
+            except ValueError:
+                logging.warning(f"Could not convert Original_bundle_price '{price_value_raw}' to float. Using 0.")
+                price = 0.0
 
-    # Average Discount Row 15
-    worksheet['A15'] = "Average Discount"; worksheet['A15'].font = bold_font
+            cell = worksheet[col_start + str(avg_price_row)]
+            cell.value = price
+            cell.number_format = '#,##0'; cell.alignment = center_aligned
+
+    # Average Discount Row - 1 row after Avg NET Selling Price
+    discount_row = avg_price_row + 1
+    worksheet[f'A{discount_row}'] = "Average Discount"; worksheet[f'A{discount_row}'].font = bold_font
     for pack in pack_definitions:
-        col_start, col_end = pack['columns'].split(':')
-        cell_range = f"{col_start}15:{col_end}{15}"; worksheet.merge_cells(cell_range)
-        discount_value_raw = menu_bundles[pack['bundle_index']].get('Discount_percentage', '0%')
-        discount_val = 0.0
-        number_format = '0%'
-        try:
-            if isinstance(discount_value_raw, str):
-                discount_val = float(discount_value_raw.replace('%', '')) / 100.0
-            elif isinstance(discount_value_raw, (int, float)):
-                discount_val = float(discount_value_raw)
-                if abs(discount_val) > 1: discount_val /= 100.0 # Assume 15 means 15%
-            else:
-                logging.warning(f"Unexpected type for Discount_percentage: {type(discount_value_raw)}. Using 0%.")
-                discount_val = 0.0
-        except ValueError:
-            logging.warning(f"Could not convert discount '{discount_value_raw}' to percentage. Displaying as text.")
-            discount_val = discount_value_raw # Keep original string if conversion fails
-            number_format = '@' # Text format
-        cell = worksheet[col_start + '15']
-        cell.value = discount_val; cell.number_format = number_format; cell.alignment = center_aligned
+        if pack['bundle_index'] < len(menu_bundles):  # Safety check
+            col_start, col_end = pack['columns'].split(':')
+            cell_range = f"{col_start}{discount_row}:{col_end}{discount_row}"; worksheet.merge_cells(cell_range)
+            
+            # Use 'Discount_percentage' (exact match to JSON)
+            discount_value_raw = menu_bundles[pack['bundle_index']].get('Discount_percentage', '0%')
+            try:
+                if isinstance(discount_value_raw, str):
+                    discount_val = float(discount_value_raw.replace('%', '')) / 100.0
+                    number_format = '0%'
+                elif isinstance(discount_value_raw, (int, float)):
+                    discount_val = float(discount_value_raw)
+                    if discount_val > 1:
+                        discount_val = discount_val / 100.0
+                    number_format = '0%'
+                else:
+                    logging.warning(f"Unexpected type for Discount_percentage: {type(discount_value_raw)}. Using 0%.")
+                    discount_val = 0.0
+                    number_format = '0%'
+            except ValueError:
+                discount_val = discount_value_raw
+                number_format = '@'
+            cell = worksheet[col_start + str(discount_row)]
+            cell.value = discount_val; cell.number_format = number_format; cell.alignment = center_aligned
 
-    # Net Price Per Person Row 16
-    worksheet['A16'] = "Net Price / Person"; worksheet['A16'].font = bold_font
+    # Net Price Per Person Row - 1 row after Average Discount
+    price_per_person_row = discount_row + 1
+    worksheet[f'A{price_per_person_row}'] = "Net Price / Person"; worksheet[f'A{price_per_person_row}'].font = bold_font
     for pack in pack_definitions:
-        col_start, col_end = pack['columns'].split(':')
-        cell_range = f"{col_start}16:{col_end}16"; worksheet.merge_cells(cell_range)
-        Price_per_diner_val = menu_bundles[pack['bundle_index']].get('Price_per_diner', '0')
-        display_text = f"{Price_per_diner_val} / Person"
-        try:
-            price_num = 0.0
-            if isinstance(Price_per_diner_val, str):
-                price_num = float(Price_per_diner_val.replace('$', '').replace(',', ''))
-            elif isinstance(Price_per_diner_val, (int, float)):
-                price_num = float(Price_per_diner_val)
-            else:
-                logging.warning(f"Unexpected type for Price_per_diner: {type(Price_per_diner_val)}. Using 0.")
-            display_text = f"{price_num:,.0f} / Person"
-        except (ValueError, TypeError) as e:
-            logging.warning(f"Could not convert or format Price_per_diner '{Price_per_diner_val}' to number: {e}. Displaying as is.")
-            display_text = f"{Price_per_diner_val} / Person" # Fallback
-        cell = worksheet[col_start + '16']
-        cell.value = display_text
-        cell.alignment = center_aligned; cell.fill = bright_yellow_fill; cell.font = bold_font
+        if pack['bundle_index'] < len(menu_bundles):  # Safety check
+            col_start, col_end = pack['columns'].split(':')
+            cell_range = f"{col_start}{price_per_person_row}:{col_end}{price_per_person_row}"; worksheet.merge_cells(cell_range)
 
-    # Adjustment Info Rows 17-18
-    worksheet['A17'] = "You can Adjust"; worksheet['A17'].font = Font(italic=True)
-    worksheet['A18'] = "Don't Adjust (Formula)"; worksheet['A18'].font = Font(italic=True)
+            # Use 'Price_per_diner' (exact match to JSON)
+            price_per_diner_val = menu_bundles[pack['bundle_index']].get('Price_per_diner', '0')
+            display_text = "0 / Person"
+            try:
+                price_num = 0.0
+                if isinstance(price_per_diner_val, str):
+                    price_num = float(price_per_diner_val.replace('$', '').replace(',', ''))
+                elif isinstance(price_per_diner_val, (int, float)):
+                    price_num = float(price_per_diner_val)
+                else:
+                    logging.warning(f"Unexpected type for Price_per_diner: {type(price_per_diner_val)}. Using 0.")
+
+                display_text = f"{price_num:,.0f} / Person"
+
+            except ValueError:
+                logging.warning(f"Could not convert Price_per_diner '{price_per_diner_val}' to number. Displaying as is.")
+                display_text = f"{price_per_diner_val} / Person"
+            except Exception as e:
+                logging.error(f"Error formatting Price_per_diner '{price_per_diner_val}': {e}. Displaying as is.")
+                display_text = f"{price_per_diner_val} / Person"
+
+            cell = worksheet[col_start + str(price_per_person_row)]
+            cell.value = display_text
+            cell.alignment = center_aligned; cell.fill = bright_yellow_fill; cell.font = bold_font
+        
+    # Adjustment Info Rows - 2 rows after Net Price Per Person
+    adjustment_row = price_per_person_row + 1
+    worksheet[f'A{adjustment_row}'] = "You can Adjust"; worksheet[f'A{adjustment_row}'].font = Font(italic=True)
+    
+    dont_adjust_row = adjustment_row + 1
+    worksheet[f'A{dont_adjust_row}'] = "Don't Adjust (Formula)"; worksheet[f'A{dont_adjust_row}'].font = Font(italic=True)
+    
     adjustable_rows = [4, 5]
     for row in adjustable_rows: # Fill adjustable rows
         for pack in pack_definitions:
-            col_start = get_column_letter(worksheet.cell(row=row, column=pack_definitions.index(pack) * 2 + 2).column) # Get starting column letter B, D, F, H
-            worksheet[f"{col_start}{row}"].fill = light_yellow_fill # Apply fill to the specific cells within merged range
-
-
-    # --- *** CORRECTED BORDER APPLICATION *** ---
-    # Apply borders
-    for row_idx in range(1, 18 + 1): # Iterate row numbers
-         for col_idx in range(1, 9 + 1): # Iterate column numbers (A=1 to I=9)
-            cell = worksheet.cell(row=row_idx, column=col_idx)
-            is_merged = False
-            top_left_of_merge = False
-
-            # Check if this cell is part of any merged range
-            for merged_range in worksheet.merged_cells.ranges:
-                if (merged_range.min_row <= row_idx <= merged_range.max_row and
-                        merged_range.min_col <= col_idx <= merged_range.max_col):
-                    is_merged = True
-                    # Check if this specific cell is the top-left one of its range
-                    if row_idx == merged_range.min_row and col_idx == merged_range.min_col:
-                        top_left_of_merge = True
-                    break # Cell found in a merged range, no need to check others
-
-            # Apply border only if it's NOT merged OR if it IS the top-left cell of a merged range
-            if not is_merged or top_left_of_merge:
-                cell.border = border
-    # --- *** END CORRECTED BORDER APPLICATION *** ---
-
-
+            if pack['bundle_index'] < len(menu_bundles):  # Safety check
+                col_start, col_end = pack['columns'].split(':'); worksheet[f"{col_start}{row}"].fill = light_yellow_fill
+            
+    # Apply borders to all cells - calculate max row based on our dynamic structure
+    max_row = dont_adjust_row
+    for row in worksheet.iter_rows(min_row=1, max_row=max_row, min_col=1, max_col=9):
+        for cell in row:
+            is_merged = any(cell.coordinate in merged_range for merged_range in worksheet.merged_cells.ranges)
+            is_top_left = any(cell.coordinate == merged_range.coord.split(':')[0] for merged_range in worksheet.merged_cells.ranges if cell.coordinate in merged_range)
+            if not is_merged or is_top_left: cell.border = border
+            
     # Set column widths
     worksheet.column_dimensions['A'].width = 25
     for col_letter in ['B', 'C', 'D', 'E', 'F', 'G', 'H', 'I']: worksheet.column_dimensions[col_letter].width = 15
-    # --- End Populating 'HH Proposal' Sheet ---
 
-    # Step 5: Create the menu sheet using the UPDATED sheet creator
-    create_menu_sheet(workbook, menu_items_data)
+    # Create the 'Raw Menu Items' sheet FIRST (we need the row mappings for the Menu Items sheet)
+    raw_menu_sheet, menu_item_row_map = create_raw_menu_sheet(workbook, menu_items_data)
+    
+    # Create the 'Menu Items' sheet with references to the Raw Menu Items sheet
+    create_menu_sheet(workbook, menu_items_data, menu_item_row_map)
+    
+    # Move the Raw Menu Items sheet to the end for better organization
+    workbook.move_sheet(raw_menu_sheet, -1)  # Move to the end
 
-    # Step 6: Save the workbook (No changes)
+    # Get all sheet names in current order
+    sheet_names = workbook.sheetnames
+
+    # Find the index of 'HH Proposal'
+    hh_proposal_index = sheet_names.index('HH Proposal')
+
+    # If 'HH Proposal' is not already first, move it to be first
+    if hh_proposal_index != 0:
+        hh_proposal_sheet = workbook['HH Proposal']
+        workbook._sheets.remove(hh_proposal_sheet)
+        workbook._sheets.insert(0, hh_proposal_sheet)
+
+    # Make the 'HH Proposal' sheet active
+    workbook.active = workbook['HH Proposal']
+    
+    # Save the workbook
     try:
         output_abs_path = os.path.abspath(output_file)
         logging.info(f"Attempting to save workbook to: {output_abs_path}")
@@ -1460,7 +1942,7 @@ def create_hungry_hub_proposal(restaurant_name, json_file='./menu_bundles.json',
         return f"Error: Permission denied saving '{output_file}'."
     except Exception as e:
         logging.error(f"Error saving Excel file '{output_file}': {e}", exc_info=True)
-        return f"Error saving Excel file '{output_file}': {e}"
+        return None
 
 @app.route('/api/upload', methods=['POST'])
 def upload_images():
@@ -1507,7 +1989,7 @@ def process_menu():
             return jsonify({"error": "Restaurant name is required"}), 400
 
         # Get API key from headers
-        api_key = request.headers.get('X-API-Key', claude_api_key)
+        api_key = request.headers.get('X-API-Key', gemini_api_key)
 
         # Construct path to uploaded images
         restaurant_folder = os.path.join(app.config['UPLOAD_FOLDER'], secure_filename(restaurant_name))
@@ -1603,11 +2085,68 @@ def process_menu():
             "error": str(e)
         }), 500
 
+@app.route('/api/get-categorized-menu', methods=['POST'])
+def get_categorized_menu_text():
+    try:
+        restaurant_name = request.json.get('restaurantName')
+        if not restaurant_name:
+            return jsonify({"error": "Restaurant name is required"}), 400
+
+        file_path = os.path.join(
+            app.config['UPLOAD_FOLDER'],
+            secure_filename(restaurant_name),
+            f"categorized_menu_items_{secure_filename(restaurant_name)}.txt"
+        )
+
+        if not os.path.exists(file_path):
+            app.logger.error(f"Categorized menu file not found at {file_path}")
+            return jsonify({"error": f"Categorized menu file not found for {restaurant_name}. It might not have been generated yet or an error occurred."}), 404
+
+        with open(file_path, 'r', encoding='utf-8') as f:
+            menu_text_content = f.read()
+        
+        return jsonify({"menuText": menu_text_content}), 200
+
+    except Exception as e:
+        app.logger.error(f"Error fetching categorized menu text: {str(e)}")
+        return jsonify({"error": "Internal server error while fetching menu text", "details": str(e)}), 500
+
+@app.route('/api/update-categorized-menu', methods=['POST'])
+def update_categorized_menu_text():
+    try:
+        restaurant_name = request.json.get('restaurantName')
+        updated_menu_text = request.json.get('menuText')
+        
+        if not restaurant_name:
+            return jsonify({"error": "Restaurant name is required"}), 400
+        if updated_menu_text is None:
+            return jsonify({"error": "Menu text is required"}), 400
+
+        file_path = os.path.join(
+            app.config['UPLOAD_FOLDER'],
+            secure_filename(restaurant_name),
+            f"categorized_menu_items_{secure_filename(restaurant_name)}.txt"
+        )
+
+        # Create directory if it doesn't exist (shouldn't happen but just in case)
+        os.makedirs(os.path.dirname(file_path), exist_ok=True)
+        
+        with open(file_path, 'w', encoding='utf-8') as f:
+            f.write(updated_menu_text)
+        
+        app.logger.info(f"Updated menu text saved for restaurant: {restaurant_name}")
+        return jsonify({"success": True, "message": "Menu text updated successfully"}), 200
+
+    except Exception as e:
+        app.logger.error(f"Error updating categorized menu text: {str(e)}")
+        return jsonify({"error": "Internal server error while updating menu text", "details": str(e)}), 500
+
 @app.route('/api/generate-bundles', methods=['POST'])
 def generate_bundles():
     restaurant_name = request.json.get('restaurantName')
+    average_spend = request.json.get('averagePrice')
     try:
-        generate()
+        generate(restaurant_name, average_spend)
         # Check if output file exists
         menu_bundles_file = os.path.join(
             app.config['UPLOAD_FOLDER'],
